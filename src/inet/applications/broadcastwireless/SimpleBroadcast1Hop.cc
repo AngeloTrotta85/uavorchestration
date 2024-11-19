@@ -44,6 +44,7 @@ SimpleBroadcast1Hop::~SimpleBroadcast1Hop()
 {
     cancelAndDelete(selfMsg);
     cancelAndDelete(taskMsg);
+    //test
 }
 
 void SimpleBroadcast1Hop::initialize(int stage)

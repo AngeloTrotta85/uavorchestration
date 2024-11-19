@@ -43,6 +43,7 @@ Define_Module(SimpleBroadcast1Hop);
 SimpleBroadcast1Hop::~SimpleBroadcast1Hop()
 {
     cancelAndDelete(selfMsg);
+    cancelAndDelete(taskMsg);
 }
 
 void SimpleBroadcast1Hop::initialize(int stage)

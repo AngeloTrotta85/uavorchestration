@@ -18,6 +18,8 @@
 
 #include <vector>
 #include <map>
+#include <cmath>
+#include <stack>
 
 #include "inet/mobility/base/MovingMobilityBase.h"
 #include "inet/applications/base/ApplicationBase.h"
@@ -30,6 +32,21 @@
 namespace inet {
 
 extern template class ClockUserModuleMixin<ApplicationBase>;
+
+enum idField : uint8_t { //Field Id
+    fldActCPU,
+    fldMaxCPU,
+    fldActMEM,
+    fldMaxMEM,
+    fldPOS_x,
+    fldPOS_y,
+    fldGPU,
+    fldCAM,
+    fldLkCAM,
+    fldLkFLY,
+    fldLkGPU
+};
+
 
 /**
  * UDP application. See NED for more info.
@@ -59,8 +76,8 @@ public:
 
         L3Address nextHop_address;
         int num_hops;
-
         // Add other fields as needed
+        bool forward;
     };
 
     struct Task
@@ -79,7 +96,8 @@ public:
         bool req_lock_flyengine;
     };
 
-  protected:
+
+protected:
     enum SelfMsgKinds { START = 1, SEND, STOP };
     enum TaskMsgKinds { NEW_T = 1 };
 
@@ -97,7 +115,8 @@ public:
     bool hasCamera;
     bool hasGPU;
 
-
+    NodeInfo lastReport; // last report data
+    std::stack<Change> stChanges;
 
     // state
     UdpSocket socket;
@@ -133,7 +152,8 @@ public:
     virtual void setSocketOptions();
 
     virtual void processHeartbeat(const Ptr<const Heartbeat> payload, L3Address srcAddr, L3Address destAddr);
-    virtual Ptr<Heartbeat> createPayload();
+    virtual void processChangesBlock(const Ptr<const ChangesBlock> payload, L3Address srcAddr, L3Address destAddr);
+    virtual Ptr<ChangesBlock> createPayload();
     virtual void processStart();
     virtual void processSend();
     virtual void processStop();

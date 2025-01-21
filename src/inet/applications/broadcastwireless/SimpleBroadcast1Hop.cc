@@ -94,6 +94,7 @@ void SimpleBroadcast1Hop::finish()
 {
     recordScalar("packets sent", numSent);
     recordScalar("packets received", numReceived);
+    EV_INFO << myAddress.str() << " table size: " << nodeDataMap.size() << " Stack size: " << stChanges.size() << endl;
     ApplicationBase::finish();
 }
 
@@ -172,6 +173,9 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
     double deltaMemory = 5;
     double deltaCoord = 2; // percent (%)
 
+    //for debug:
+    bool go = true; //sent my own data even though noting has changed
+
     //comparing actual values with last reported ones over deltas
     Change ch;
     ch.setSequenceNumber(seq);
@@ -179,184 +183,126 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
     ch.setNum_hops(0);
     int stksize = stChanges.size();
     if ((abs((lastReport.getCoord_x() - mob->getCurrentPosition().x)/lastReport.getCoord_x()) * 100) > deltaCoord ||
-            (abs((lastReport.getCoord_y() - mob->getCurrentPosition().y)/lastReport.getCoord_y()) * 100)  > deltaCoord  ) {
+            (abs((lastReport.getCoord_y() - mob->getCurrentPosition().y)/lastReport.getCoord_y()) * 100)  > deltaCoord  || go) {
         //report new position
-        //std::cout << "Position changed " << std::endl;
         ch.setParammeter(fldPOS_x);
         ch.setValue(mob->getCurrentPosition().x);
         lastReport.setCoord_x(mob->getCurrentPosition().x);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
 
         ch.setParammeter(fldPOS_y);
         ch.setValue(mob->getCurrentPosition().y);
         lastReport.setCoord_y(mob->getCurrentPosition().y);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
 
     }
 
-    if (lastReport.getCompMaxUsage() != computationalPower) {
+    if (lastReport.getCompMaxUsage() != computationalPower  || go) {
         //report Max CPU
-        //std::cout << "CPU MAX changed " << std::endl;
         ch.setParammeter(fldMaxCPU);
         ch.setValue(computationalPower);
         lastReport.setCompMaxUsage(computationalPower);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
     }
 
-    if (lastReport.getMemoryMaxUsage() != availableMaxMemory) {
+    if (lastReport.getMemoryMaxUsage() != availableMaxMemory  || go) {
         //report MAX Memory
-        //std::cout << "Memory MAX changed " << std::endl;
         ch.setParammeter(fldMaxMEM);
         ch.setValue(availableMaxMemory);
         lastReport.setMemoryMaxUsage(availableMaxMemory);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
 
     }
 
-    if (abs(lastReport.getCompActUsage() - compActUsage) > deltaComp) {
+    if (abs(lastReport.getCompActUsage() - compActUsage) > deltaComp  || go) {
         //report CPU
-        //std::cout << "CPU changed " << std::endl;
         ch.setParammeter(fldActCPU);
         ch.setValue(compActUsage);
         lastReport.setCompActUsage(compActUsage);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
     }
 
-    if (abs(lastReport.getMemoryActUsage() - memActUsage) > deltaMemory) {
+    if (abs(lastReport.getMemoryActUsage() - memActUsage) > deltaMemory  || go) {
         //report Memory
-        //std::cout << "Memory changed " << std::endl;
         ch.setParammeter(fldActMEM);
         ch.setValue(memActUsage);
         lastReport.setMemoryActUsage(memActUsage);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
 
     }
 
-    if (lastReport.getHasCamera() != hasCamera) {
+    if (lastReport.getHasCamera() != hasCamera  || go) {
         //report Camera
-        //std::cout << "Notifying camera presence" << std::endl;
         ch.setParammeter(fldCAM);
         ch.setValue((hasCamera ? 1 : 0));
         lastReport.setHasCamera(hasCamera);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
     }
 
-    if (lastReport.getHasGPU() != hasGPU) {
+    if (lastReport.getHasGPU() != hasGPU  || go) {
         //report GPU
-        //std::cout << "Notifying GPU presence " << std::endl;
         ch.setParammeter(fldGPU);
         ch.setValue((hasGPU? 1 : 0));
         lastReport.setHasGPU(hasGPU);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
     }
 
-    if (lastReport.getLockedCamera() != lockedCamera) {
+    if (lastReport.getLockedCamera() != lockedCamera  || go) {
         //report locked camera
-        //std::cout << "Locking camera notify" << std::endl;
         ch.setParammeter(fldLkCAM);
         ch.setValue((lockedCamera ? 1 : 0));
         lastReport.setLockedCamera(lockedCamera);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
     }
 
-    if (lastReport.getLockedFly() != lockedFly) {
+    if (lastReport.getLockedFly() != lockedFly  || go) {
         //report locked fly
-        //std::cout << "Locking Fly notify" << std::endl;
         ch.setParammeter(fldLkFLY);
         ch.setValue((lockedFly ? 1 : 0));
         lastReport.setLockedFly(lockedFly);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
 
     }
 
-    if (lastReport.getLockedGPU() != lockedGPU) {
+    if (lastReport.getLockedGPU() != lockedGPU  || go) {
         //report locked GPU
-        //std::cout << "Locking GPU notify" << std::endl;
         ch.setParammeter(fldLkGPU);
         ch.setValue((lockedGPU ? 1 : 0));
         lastReport.setLockedGPU(lockedGPU);
-        stChanges.push(ch);
+        stChanges.push_back(ch);
     }
 
     if (stksize < stChanges.size()) {
         lastReport.setSequenceNumber(seq);
     }
 
-    while (!stChanges.empty()){
-        //ch = stChanges.top();
-        payload->appendChangesList(stChanges.top());
-        stChanges.pop();
+    //avoid packet oversize
+    int i = 0;
+    while (!stChanges.empty() && i<1000){
+        Change cht = stChanges.at(0);
+        //std::cout << cht.getIpAddress() << " | " << ((int) cht.getParammeter()) << " | " << cht.getValue() << endl;
+        payload->appendChangesList(cht);
+        stChanges.pop_front();
+        i++;
     }
 
 
 
     payload->setChangesCount(payload->getChangesListArraySize());
-    std::cout << "sent  " << payload->getChangesListArraySize() << " changes " << std::endl;
+    if (payload->getChangesListArraySize() > 0) {
+        EV_INFO << "sending  " << payload->getChangesListArraySize() << " changes " << std::endl;
+    }
 
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
+    //payload size
+    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
+
+    payload->setChunkLength(B(s));
 
     return payload;
 
 
-
-
-    //const auto& payload = makeShared<Heartbeat>();
-
-//    payload->setChunkLength(B(par("messageLength")));
-
-//    payload->setSequenceNumber(numSent);
-
-//    payload->setIpAddress(myAddress);
-//    payload->setCoord_x(mob->getCurrentPosition().x);
-//    payload->setCoord_y(mob->getCurrentPosition().y);
-
-//    payload->setCompMaxUsage(computationalPower);
-//    payload->setMemoryMaxUsage(availableMaxMemory);
-
-//    payload->setCompActUsage(compActUsage);
-//    payload->setMemoryActUsage(memActUsage);
-//    payload->setHasCamera(hasCamera);
-//    payload->setHasGPU(hasGPU);
-//    payload->setLockedCamera(lockedCamera);
-//    payload->setLockedFly(lockedFly);
-//    payload->setLockedGPU(lockedGPU);
-/*
-    int i = 0;
-    payload->setNodeInfoListArraySize(nodeDataMap.size());
-    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
-        L3Address ipAddr = it->first;
-        NodeData data = it->second;
-
-        NodeInfo new_NodeInfo;
-        new_NodeInfo.setTimestamp(data.timestamp);
-        new_NodeInfo.setSequenceNumber(data.sequenceNumber);
-        new_NodeInfo.setIpAddress(data.address);
-        new_NodeInfo.setCoord_x(data.coord_x);
-        new_NodeInfo.setCoord_y(data.coord_y);
-        new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
-        new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
-        new_NodeInfo.setCompActUsage(data.compActUsage);
-        new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
-
-        new_NodeInfo.setNextHop_address(data.nextHop_address);
-        new_NodeInfo.setNum_hops(data.num_hops);
-
-        new_NodeInfo.setHasGPU(data.hasGPU);
-        new_NodeInfo.setHasCamera(data.hasCamera);
-
-        new_NodeInfo.setLockedCamera(data.lockedCamera);
-        new_NodeInfo.setLockedGPU(data.lockedGPU);
-        new_NodeInfo.setLockedFly(data.lockedFly);
-
-        payload->setNodeInfoList(i, new_NodeInfo);
-
-        i++;
-    }
-*/
-    // payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
-
-    // return payload;
 }
 
 void SimpleBroadcast1Hop::sendPacket()
@@ -368,56 +314,9 @@ void SimpleBroadcast1Hop::sendPacket()
         packet->addTag<FragmentationReq>()->setDontFragment(true);
 
     const auto& payload = createPayload();
-
-//    const auto& payload = makeShared<Heartbeat>();
-    payload->setChunkLength(B(par("messageLength")));
-//
-//    payload->setSequenceNumber(numSent);
-//    payload->setIpAddress(myAddress);
-//    payload->setCoord_x(mob->getCurrentPosition().x);
-//    payload->setCoord_y(mob->getCurrentPosition().y);
-//
-//    payload->setCompMaxUsage(computationalPower);
-//    payload->setMemoryMaxUsage(availableMaxMemory);
-//    double compActUsage = 0;
-//    double memActUsage = 0;
-//    for (size_t i = 0; i < assignedTask_list.size(); ++i) {
-//        if ((simTime() < assignedTask_list[i].end_timestamp) && (simTime() >= assignedTask_list[i].start_timestamp)){
-//            compActUsage += assignedTask_list[i].req_computation;
-//            memActUsage += assignedTask_list[i].req_memory;
-//        }
-//    }
-//    payload->setCompActUsage(compActUsage);
-//    payload->setMemoryActUsage(memActUsage);
-//
-//    int i = 0;
-//    payload->setNodeInfoListArraySize(nodeDataMap.size());
-//    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
-//        L3Address ipAddr = it->first;
-//        NodeData data = it->second;
-//
-//        NodeInfo new_NodeInfo;
-//        new_NodeInfo.setTimestamp(data.timestamp);
-//        new_NodeInfo.setSequenceNumber(data.sequenceNumber);
-//        new_NodeInfo.setIpAddress(data.address);
-//        new_NodeInfo.setCoord_x(data.coord_x);
-//        new_NodeInfo.setCoord_y(data.coord_y);
-//        new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
-//        new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
-//        new_NodeInfo.setCompActUsage(data.compActUsage);
-//        new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
-//
-//        new_NodeInfo.setNextHop_address(data.nextHop_address);
-//        new_NodeInfo.setNum_hops(data.num_hops);
-//
-//        payload->setNodeInfoList(i, new_NodeInfo);
-//
-//        i++;
-//    }
-//
-//    payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
     packet->insertAtBack(payload);
-//    std::cout << "Packet size: " << packet->getTotalLength() << std::endl;
+
+    EV_INFO << "Packet size: " << packet->getTotalLength() << std::endl;
 
     L3Address destAddr = chooseDestAddr();
     emit(packetSentSignal, packet);
@@ -602,14 +501,15 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
     Change ch;
     for (int i=0; i<payload->getChangesCount(); i++){
         ch = payload->getChangesList(i);
+//        std::cout << ch.getIpAddress() << " | " << ((int) ch.getParammeter()) << " | " << ch.getValue() << endl;
+
         L3Address node_addr = ch.getIpAddress();
         if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
             int tmp_num_hops = 100000;
             L3Address tmp_nextHop_address = L3Address();
 
             NodeData nd;
-            if (nodeDataMap.count(node_addr) != 0) {
-                std::cout << "New Node" << std::endl;
+            if (nodeDataMap.count(node_addr) != 1) {
                 //new node
                 nd.timestamp = payload->getTimestamp();
                 nd.sequenceNumber = ch.getSequenceNumber();
@@ -628,188 +528,65 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
 //                nd.nextHop_address = payload->getIpAddress();
 //                nd.num_hops = nf.getNum_hops() + 1;
                 nodeDataMap[node_addr] = nd;
+                for (int j=0; j<16; j++) nd.lastSeqNumber[j] = 0;
             } else {
                 nd = nodeDataMap[node_addr];
             }
 
             //add sequence number verification
-
-            switch (ch.getParammeter()){
-            case fldPOS_x:
-//                std::cout << "new pos x: " << ch.getValue() << std::endl;
-                nd.coord_x = ch.getValue();
-                break;
-            case fldPOS_y:
-//                std::cout << "new pos y: " << ch.getValue() << std::endl;
-                nd.coord_y = ch.getValue();
-                break;
-            case fldActCPU:
-//                std::cout << "new Act CPU: " << ch.getValue() << std::endl;
-                nd.compActUsage = ch.getValue();
-                break;
-            case fldActMEM:
-//                std::cout << "new Act Memory: " << ch.getValue() << std::endl;
-                nd.memoryActUsage = ch.getValue();
-                break;
-            case fldMaxCPU:
-//                std::cout << "new Max CPU: " << ch.getValue() << std::endl;
-                nd.compMaxUsage = ch.getValue();
-                break;
-            case fldMaxMEM:
-//                std::cout << "new Max Memory: " << ch.getValue() << std::endl;
-                nd.memoryMaxUsage = ch.getValue();
-                break;
-            case fldGPU:
-//                std::cout << "node has GPU: " << (ch.getValue() == 1? "Yes": "No") << std::endl;
-                nd.hasGPU = (ch.getValue() == 1);
-                break;
-            case fldCAM:
-//                std::cout << "node has Camera: " << (ch.getValue() == 1? "Yes": "No") << std::endl;
-                nd.hasCamera = (ch.getValue() == 1);
-                break;
-            case fldLkGPU:
-//                std::cout << "Locked GPU: " << (ch.getValue() == 1? "Yes": "No") << std::endl;
-                nd.lockedGPU = (ch.getValue() == 1);
-                break;
-            case fldLkCAM:
-//                std::cout << "Locked Camera: " << (ch.getValue() == 1? "Yes": "No") << std::endl;
-                nd.lockedCamera = (ch.getValue() == 1);
-                break;
-            case fldLkFLY:
-//                std::cout << "Locked Flight: " << (ch.getValue() == 1? "Yes": "No") << std::endl;
-                nd.lockedFly = (ch.getValue() == 1);
-                break;
-            default:
-                std::cout << "new unidentified field " << std::endl;
-                break;
+            if (nd.lastSeqNumber[ch.getParammeter()] < ch.getSequenceNumber()) {
+                switch (ch.getParammeter()){
+                case fldPOS_x:
+                    nd.coord_x = ch.getValue();
+                    break;
+                case fldPOS_y:
+                    nd.coord_y = ch.getValue();
+                    break;
+                case fldActCPU:
+                    nd.compActUsage = ch.getValue();
+                    break;
+                case fldActMEM:
+                    nd.memoryActUsage = ch.getValue();
+                    break;
+                case fldMaxCPU:
+                    nd.compMaxUsage = ch.getValue();
+                    break;
+                case fldMaxMEM:
+                    nd.memoryMaxUsage = ch.getValue();
+                    break;
+                case fldGPU:
+                    nd.hasGPU = (ch.getValue() == 1);
+                    break;
+                case fldCAM:
+                    nd.hasCamera = (ch.getValue() == 1);
+                    break;
+                case fldLkGPU:
+                    nd.lockedGPU = (ch.getValue() == 1);
+                    break;
+                case fldLkCAM:
+                    nd.lockedCamera = (ch.getValue() == 1);
+                    break;
+                case fldLkFLY:
+                    nd.lockedFly = (ch.getValue() == 1);
+                    break;
+                default:
+                    EV_ERROR << "new unidentified field " << std::endl;
+                    break;
+                }
+                nd.lastSeqNumber[ch.getParammeter()] = ch.getSequenceNumber();
+                nodeDataMap[node_addr] = nd;
+                addChange(ch);
             }
-            // next hop police
-            ch.setNum_hops(ch.getNum_hops()+1);
-            if (ch.getNum_hops()<2) stChanges.push(ch);
-
-//            if ((nodeDataMap.count(node_addr) != 0) && (nodeDataMap[node_addr].num_hops > tmp_num_hops)){
-//                nodeDataMap[node_addr].nextHop_address = tmp_nextHop_address;
-//                nodeDataMap[node_addr].num_hops = tmp_num_hops;
-//            }
         }
 
     }
-    std::cout << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
-    //const Change ch = payload->getChangesList(<Change> payload->getChangesCount());
-
-
-
-
-
-//
-//
-//
-//
-//    // Create or update the data associated with this IP addres
-//    NodeData data;
-//    data.timestamp = simTime();
-//    data.sequenceNumber = payload->getSequenceNumber();
-//    data.address = payload->getIpAddress();
-//    data.coord_x = payload->getCoord_x();
-//    data.coord_y = payload->getCoord_y();
-//
-//    data.memoryActUsage = payload->getMemoryActUsage();
-//    data.memoryMaxUsage = payload->getMemoryMaxUsage();
-//    data.compActUsage = payload->getCompActUsage();
-//    data.compMaxUsage = payload->getCompMaxUsage();
-//
-//    data.hasCamera = payload->getHasCamera();
-//    data.lockedCamera = payload->getLockedCamera();
-//
-//    data.hasGPU = payload->getHasGPU();
-//    data.lockedGPU = payload->getLockedGPU();
-//
-//    data.lockedFly = payload->getLockedFly();
-//
-//    data.nextHop_address = payload->getIpAddress();
-//    data.num_hops = 1;
-//
-//    // Store or update the data in the map
-//    nodeDataMap[srcAddr] = data;
-//
-//    size_t nodeArraySize = payload->getNodeInfoListArraySize();
-//    for (int i = 0; i < nodeArraySize; ++i) {
-//        NodeInfo nf = payload->getNodeInfoList(i);
-//        L3Address node_addr = nf.getIpAddress();
-//
-//        if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
-//
-//            int tmp_num_hops = 100000;
-//            L3Address tmp_nextHop_address = L3Address();
-//            if (nodeDataMap.count(node_addr) != 0) {
-//                tmp_nextHop_address = nodeDataMap[node_addr].nextHop_address;
-//                tmp_num_hops = nodeDataMap[node_addr].num_hops;
-//            }
-//
-//            if (    (nodeDataMap.count(node_addr) == 0) ||
-//                    (nodeDataMap[node_addr].timestamp < nf.getTimestamp())
-//            ){
-//                // Create or update the data associated with this IP address
-//                NodeData data_nest;
-//
-//
-//                data_nest.timestamp = nf.getTimestamp();
-//                data_nest.sequenceNumber = nf.getSequenceNumber();
-//                data_nest.address = nf.getIpAddress();
-//                data_nest.coord_x = nf.getCoord_x();
-//                data_nest.coord_y = nf.getCoord_y();
-//
-//                data_nest.memoryActUsage = nf.getMemoryActUsage();
-//                data_nest.memoryMaxUsage = nf.getMemoryMaxUsage();
-//                data_nest.compActUsage = nf.getCompActUsage();
-//                data_nest.compMaxUsage = nf.getCompMaxUsage();
-//
-//                data_nest.hasCamera = nf.getHasCamera();
-//                data_nest.lockedCamera = nf.getLockedCamera();
-//
-//                data_nest.hasGPU = nf.getHasGPU();
-//                data_nest.lockedGPU = nf.getLockedGPU();
-//
-//                data_nest.lockedFly = nf.getLockedFly();
-//
-//                data_nest.nextHop_address = payload->getIpAddress();
-//                data_nest.num_hops = nf.getNum_hops() + 1;
-//
-////                if (    (nodeDataMap.count(node_addr) != 0) &&
-////                        (nodeDataMap[node_addr].num_hops < nf.getNum_hops())
-////                ){
-////                    data_nest.nextHop_address = nodeDataMap[node_addr].nextHop_address;
-////                    data_nest.num_hops = nodeDataMap[node_addr].num_hops;
-////                }
-////                else {
-////                    data_nest.nextHop_address = payload->getIpAddress();
-////                    data_nest.num_hops = nf.getNum_hops() + 1;
-////                }
-//
-//                // Store or update the data in the map
-//                nodeDataMap[node_addr] = data_nest;
-//            }
-//
-//            // Old next_hop was better
-//            if (    (nodeDataMap.count(node_addr) != 0) &&
-//                    (nodeDataMap[node_addr].num_hops > tmp_num_hops)
-//            ){
-//                nodeDataMap[node_addr].nextHop_address = tmp_nextHop_address;
-//                nodeDataMap[node_addr].num_hops = tmp_num_hops;
-//            }
-//        }
-//    }
-
-    // Log the extracted information
-    //EV_INFO << "Received Heartbeat message: seqNum=" << sequenceNumber
-    //       << ", coord_x=" << coord_x << ", coord_y=" << coord_y << endl;
+    //EV_INFO << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
 
 }
 
 
 void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3Address srcAddr, L3Address destAddr)
 {
-    std::cout << "Received!" << std::endl;
 
     L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
 
@@ -914,6 +691,27 @@ void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3
 
 }
 
+void SimpleBroadcast1Hop::addChange(Change ch){
+    bool cy = true;
+    for (int i=0; i<stChanges.size(); i++){
+        if (stChanges[i].getIpAddress() ==ch.getIpAddress() &&
+                stChanges[i].getParammeter() == ch.getParammeter()) {
+            cy = false;
+            if (ch.getSequenceNumber() > stChanges[i].getSequenceNumber() ) {
+                //update element
+                stChanges[i].setValue(ch.getValue());
+                stChanges[i].setSequenceNumber(ch.getSequenceNumber());
+            }
+        }
+    }
+    if (cy) {
+        //add element
+        stChanges.push_back(ch);
+    }
+}
+
+
+
 void SimpleBroadcast1Hop::processPacket(Packet *pk)
 {
     emit(packetReceivedSignal, pk);
@@ -937,6 +735,7 @@ void SimpleBroadcast1Hop::processPacket(Packet *pk)
         // Check if the packet contains ChangesBlock or Heartbeat data
         if (pk->hasData<ChangesBlock>()) {
             const auto& payload = pk->peekData<ChangesBlock>();
+//            std::cout << "---------" << myAddress << " Receive-----------------" <<  std::endl;
             processChangesBlock(payload, srcAddr, destAddr);
 
 

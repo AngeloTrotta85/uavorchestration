@@ -19,7 +19,7 @@
 #include <vector>
 #include <map>
 #include <cmath>
-#include <stack>
+#include <deque>
 
 #include "inet/mobility/base/MovingMobilityBase.h"
 #include "inet/applications/base/ApplicationBase.h"
@@ -77,7 +77,7 @@ public:
         L3Address nextHop_address;
         int num_hops;
         // Add other fields as needed
-        bool forward;
+        uint32_t lastSeqNumber[16]; //last received sequence number for each field
     };
 
     struct Task
@@ -116,7 +116,7 @@ protected:
     bool hasGPU;
 
     NodeInfo lastReport; // last report data
-    std::stack<Change> stChanges;
+    std::deque<Change> stChanges;
 
     // state
     UdpSocket socket;
@@ -153,6 +153,7 @@ protected:
 
     virtual void processHeartbeat(const Ptr<const Heartbeat> payload, L3Address srcAddr, L3Address destAddr);
     virtual void processChangesBlock(const Ptr<const ChangesBlock> payload, L3Address srcAddr, L3Address destAddr);
+    virtual void addChange(Change ch);
     virtual Ptr<ChangesBlock> createPayload();
     virtual void processStart();
     virtual void processSend();
@@ -187,7 +188,9 @@ inline std::ostream& operator<<(std::ostream& os, const SimpleBroadcast1Hop::Nod
             << ", compMaxUsage: " << data.compMaxUsage
             << " ||| nextHop_address: " << data.nextHop_address
             << ", num_hops: " << data.num_hops
-            << " }";
+            << ", lastSeqNumber: ";
+    for (int i=0; i<16; i++) os << data.lastSeqNumber[i] << ",";
+    os << " }";
 
     return os;
 }

@@ -118,6 +118,13 @@ protected:
     NodeInfo lastReport; // last report data
     std::deque<Change> stChanges;
 
+    double compActUsage = 0;
+    double memActUsage = 0;
+    bool lockedGPU = false;
+    bool lockedCamera = false;
+    bool lockedFly = false;
+
+
     // state
     UdpSocket socket;
     ClockEvent *selfMsg = nullptr;
@@ -154,6 +161,8 @@ protected:
     virtual void processHeartbeat(const Ptr<const Heartbeat> payload, L3Address srcAddr, L3Address destAddr);
     virtual void processChangesBlock(const Ptr<const ChangesBlock> payload, L3Address srcAddr, L3Address destAddr);
     virtual void addChange(Change ch);
+    virtual void updateTasks();
+    virtual void updateChanges();
     virtual Ptr<ChangesBlock> createPayload();
     virtual void processStart();
     virtual void processSend();
@@ -175,6 +184,7 @@ protected:
 };
 
 // Correctly overload operator<< as a non-member function
+
 inline std::ostream& operator<<(std::ostream& os, const SimpleBroadcast1Hop::NodeData& data)
 {
     os << "{ sequenceNumber: " << data.sequenceNumber

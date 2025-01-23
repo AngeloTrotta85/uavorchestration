@@ -94,7 +94,11 @@ void SimpleBroadcast1Hop::finish()
 {
     recordScalar("packets sent", numSent);
     recordScalar("packets received", numReceived);
-    EV_INFO << myAddress.str() << " table size: " << nodeDataMap.size() << " Stack size: " << stChanges.size() << endl;
+    std::cout << myAddress.str()
+            << " DataMap size: " << nodeDataMap.size()
+            << " stChanges size: " << stChanges.size()
+            << " Packets sent: " << numSent
+            << " Packets Received: " << numReceived << endl;
     ApplicationBase::finish();
 }
 
@@ -142,16 +146,15 @@ L3Address SimpleBroadcast1Hop::chooseDestAddr()
     return destAddresses[k];
 }
 
-Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
-{
 
+void SimpleBroadcast1Hop::updateTasks(){
     //update NodeInfo with assigned tasks
+    compActUsage = 0;
+    memActUsage = 0;
+    lockedGPU = false;
+    lockedCamera = false;
+    lockedFly = false;
 
-    double compActUsage = 0;
-    double memActUsage = 0;
-    bool lockedGPU = false;
-    bool lockedCamera = false;
-    bool lockedFly = false;
     for (size_t i = 0; i < assignedTask_list.size(); ++i) {
         if ((simTime() < assignedTask_list[i].end_timestamp) && (simTime() >= assignedTask_list[i].start_timestamp)){
             compActUsage += assignedTask_list[i].req_computation;
@@ -162,10 +165,15 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         }
     }
 
+//    if ((rand() % 101) > 80 ) {
+//        compActUsage = rand() % 101;
+//    }
 
-    const auto& payload = makeShared<ChangesBlock>();
+}
 
+void SimpleBroadcast1Hop::updateChanges(){
     //getting changes of THIS node...
+
 
     uint32_t seq = lastReport.getSequenceNumber() + 1;
 
@@ -174,7 +182,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
     double deltaCoord = 2; // percent (%)
 
     //for debug:
-    bool go = true; //sent my own data even though noting has changed
+    bool go = false;//((rand() % 101) > 50 );//true; //sent my own data even though noting has changed
 
     //comparing actual values with last reported ones over deltas
     Change ch;
@@ -188,12 +196,12 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldPOS_x);
         ch.setValue(mob->getCurrentPosition().x);
         lastReport.setCoord_x(mob->getCurrentPosition().x);
-        stChanges.push_back(ch);
+        addChange(ch);
 
         ch.setParammeter(fldPOS_y);
         ch.setValue(mob->getCurrentPosition().y);
         lastReport.setCoord_y(mob->getCurrentPosition().y);
-        stChanges.push_back(ch);
+        addChange(ch);
 
     }
 
@@ -202,7 +210,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldMaxCPU);
         ch.setValue(computationalPower);
         lastReport.setCompMaxUsage(computationalPower);
-        stChanges.push_back(ch);
+        addChange(ch);
     }
 
     if (lastReport.getMemoryMaxUsage() != availableMaxMemory  || go) {
@@ -210,7 +218,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldMaxMEM);
         ch.setValue(availableMaxMemory);
         lastReport.setMemoryMaxUsage(availableMaxMemory);
-        stChanges.push_back(ch);
+        addChange(ch);
 
     }
 
@@ -219,7 +227,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldActCPU);
         ch.setValue(compActUsage);
         lastReport.setCompActUsage(compActUsage);
-        stChanges.push_back(ch);
+        addChange(ch);
     }
 
     if (abs(lastReport.getMemoryActUsage() - memActUsage) > deltaMemory  || go) {
@@ -227,16 +235,17 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldActMEM);
         ch.setValue(memActUsage);
         lastReport.setMemoryActUsage(memActUsage);
-        stChanges.push_back(ch);
+        addChange(ch);
 
     }
+
 
     if (lastReport.getHasCamera() != hasCamera  || go) {
         //report Camera
         ch.setParammeter(fldCAM);
         ch.setValue((hasCamera ? 1 : 0));
         lastReport.setHasCamera(hasCamera);
-        stChanges.push_back(ch);
+        addChange(ch);
     }
 
     if (lastReport.getHasGPU() != hasGPU  || go) {
@@ -244,7 +253,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldGPU);
         ch.setValue((hasGPU? 1 : 0));
         lastReport.setHasGPU(hasGPU);
-        stChanges.push_back(ch);
+        addChange(ch);
     }
 
     if (lastReport.getLockedCamera() != lockedCamera  || go) {
@@ -252,7 +261,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldLkCAM);
         ch.setValue((lockedCamera ? 1 : 0));
         lastReport.setLockedCamera(lockedCamera);
-        stChanges.push_back(ch);
+        addChange(ch);
     }
 
     if (lastReport.getLockedFly() != lockedFly  || go) {
@@ -260,32 +269,42 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
         ch.setParammeter(fldLkFLY);
         ch.setValue((lockedFly ? 1 : 0));
         lastReport.setLockedFly(lockedFly);
-        stChanges.push_back(ch);
-
+        addChange(ch);
     }
+
 
     if (lastReport.getLockedGPU() != lockedGPU  || go) {
         //report locked GPU
         ch.setParammeter(fldLkGPU);
         ch.setValue((lockedGPU ? 1 : 0));
         lastReport.setLockedGPU(lockedGPU);
-        stChanges.push_back(ch);
+        addChange(ch);
     }
 
     if (stksize < stChanges.size()) {
         lastReport.setSequenceNumber(seq);
     }
 
+}
+
+Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
+{
+
+
+    const auto& payload = makeShared<ChangesBlock>();
+
     //avoid packet oversize
+//    if (payload->getChangesListArraySize() > 0) {
+//        EV_ERROR << "trash in the payload " << std::endl;
+//    }
     int i = 0;
     while (!stChanges.empty() && i<1000){
-        Change cht = stChanges.at(0);
+        Change cht = stChanges.front();
         //std::cout << cht.getIpAddress() << " | " << ((int) cht.getParammeter()) << " | " << cht.getValue() << endl;
         payload->appendChangesList(cht);
         stChanges.pop_front();
         i++;
     }
-
 
 
     payload->setChangesCount(payload->getChangesListArraySize());
@@ -297,6 +316,8 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
 
     //payload size
     uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
+
+    //std::cout << myAddress << " Sending " << payload->getChangesListArraySize() << " changes" << endl;
 
     payload->setChunkLength(B(s));
 
@@ -364,15 +385,19 @@ void SimpleBroadcast1Hop::processStart()
 
 void SimpleBroadcast1Hop::processSend()
 {
-    sendPacket();
-    clocktime_t d = par("sendInterval");
-    if (stopTime < CLOCKTIME_ZERO || getClockTime() + d < stopTime) {
-        selfMsg->setKind(SEND);
-        scheduleClockEventAfter(d, selfMsg);
-    }
-    else {
-        selfMsg->setKind(STOP);
-        scheduleClockEventAt(stopTime, selfMsg);
+    updateTasks();
+    updateChanges();
+    if (stChanges.size() > 0 ) {
+        sendPacket();
+        clocktime_t d = par("sendInterval");
+        if (stopTime < CLOCKTIME_ZERO || getClockTime() + d < stopTime) {
+            selfMsg->setKind(SEND);
+            scheduleClockEventAfter(d, selfMsg);
+        }
+        else {
+            selfMsg->setKind(STOP);
+            scheduleClockEventAt(stopTime, selfMsg);
+        }
     }
 }
 
@@ -494,16 +519,16 @@ void SimpleBroadcast1Hop::printPacket(Packet *msg)
 void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>payload, L3Address srcAddr, L3Address destAddr)
 {
 
-    // std::cout << "Received ChangesBlock! Changes:" << payload->getChangesCount() <<  std::endl;
+    //std::cout << myAddress << " Receive " << payload->getChangesListArraySize() << " changes from " << srcAddr << endl;
+
+
     L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
 
-    //Change *ch = new Change[payload->getChangesCount()];
     Change ch;
     for (int i=0; i<payload->getChangesCount(); i++){
         ch = payload->getChangesList(i);
-//        std::cout << ch.getIpAddress() << " | " << ((int) ch.getParammeter()) << " | " << ch.getValue() << endl;
-
         L3Address node_addr = ch.getIpAddress();
+
         if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
             int tmp_num_hops = 100000;
             L3Address tmp_nextHop_address = L3Address();
@@ -527,14 +552,13 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
                 nd.lockedFly = false;
 //                nd.nextHop_address = payload->getIpAddress();
 //                nd.num_hops = nf.getNum_hops() + 1;
-                nodeDataMap[node_addr] = nd;
                 for (int j=0; j<16; j++) nd.lastSeqNumber[j] = 0;
+                nodeDataMap[node_addr] = nd;
             } else {
                 nd = nodeDataMap[node_addr];
             }
-
             //add sequence number verification
-            if (nd.lastSeqNumber[ch.getParammeter()] < ch.getSequenceNumber()) {
+            if (nd.lastSeqNumber[ch.getParammeter()] < ch.getSequenceNumber() || nd.lastSeqNumber[ch.getParammeter()] == 0) {
                 switch (ch.getParammeter()){
                 case fldPOS_x:
                     nd.coord_x = ch.getValue();
@@ -582,6 +606,89 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
     }
     //EV_INFO << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
 
+}
+
+void SimpleBroadcast1Hop::addChange(Change ch){
+    bool cy = true;
+    for (int i=0; i<stChanges.size(); i++){
+        if (stChanges[i].getIpAddress() ==ch.getIpAddress() &&
+                stChanges[i].getParammeter() == ch.getParammeter()) {
+            cy = false;
+            if (ch.getSequenceNumber() > stChanges[i].getSequenceNumber() ) {
+                //update element
+                stChanges[i].setValue(ch.getValue());
+                stChanges[i].setSequenceNumber(ch.getSequenceNumber());
+            }
+        }
+    }
+    if (cy) {
+        //add element
+        stChanges.push_back(ch);
+    }
+}
+
+
+
+void SimpleBroadcast1Hop::processPacket(Packet *pk)
+{
+    emit(packetReceivedSignal, pk);
+    EV_INFO << "Received packet: " << UdpSocket::getReceivedPacketInfo(pk) << endl;
+    printPacket(pk);
+
+    // Extract the sender's IP address
+    L3Address srcAddr, destAddr;
+    L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
+
+    Ptr<const L3AddressTagBase> addresses = pk->findTag<L3AddressReq>();
+    if (addresses == nullptr)
+        addresses = pk->findTag<L3AddressInd>();
+    if (addresses != nullptr) {
+        srcAddr = addresses->getSrcAddress();
+        destAddr = addresses->getDestAddress();
+    }
+
+    if ((srcAddr != loopbackAddress) && (srcAddr != myAddress)) {
+        // Process here
+        // Check if the packet contains ChangesBlock or Heartbeat data
+        if (pk->hasData<ChangesBlock>()) {
+            const auto& payload = pk->peekData<ChangesBlock>();
+            processChangesBlock(payload, srcAddr, destAddr);
+//
+//        } else
+//        if (pk->hasData<Heartbeat>()) {
+//            // Extract the Heartbeat payload
+//            const auto& payload = pk->peekData<Heartbeat>();
+//
+//            processHeartbeat(payload, srcAddr, destAddr);
+        } else {
+            EV_WARN << "Received packet does not contain a Heartbeat payload." << endl;
+        }
+    }
+
+    delete pk;
+    numReceived++;
+}
+
+void SimpleBroadcast1Hop::handleStartOperation(LifecycleOperation *operation)
+{
+    clocktime_t start = std::max(startTime, getClockTime());
+    if ((stopTime < CLOCKTIME_ZERO) || (start < stopTime) || (start == stopTime && startTime == stopTime)) {
+        selfMsg->setKind(START);
+        scheduleClockEventAt(start, selfMsg);
+    }
+}
+
+void SimpleBroadcast1Hop::handleStopOperation(LifecycleOperation *operation)
+{
+    cancelEvent(selfMsg);
+    socket.close();
+    delayActiveOperationFinish(par("stopOperationTimeout"));
+}
+
+void SimpleBroadcast1Hop::handleCrashOperation(LifecycleOperation *operation)
+{
+    cancelClockEvent(selfMsg);
+    socket.destroy(); // TODO  in real operating systems, program crash detected by OS and OS closes sockets of crashed programs.
 }
 
 
@@ -691,91 +798,6 @@ void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3
 
 }
 
-void SimpleBroadcast1Hop::addChange(Change ch){
-    bool cy = true;
-    for (int i=0; i<stChanges.size(); i++){
-        if (stChanges[i].getIpAddress() ==ch.getIpAddress() &&
-                stChanges[i].getParammeter() == ch.getParammeter()) {
-            cy = false;
-            if (ch.getSequenceNumber() > stChanges[i].getSequenceNumber() ) {
-                //update element
-                stChanges[i].setValue(ch.getValue());
-                stChanges[i].setSequenceNumber(ch.getSequenceNumber());
-            }
-        }
-    }
-    if (cy) {
-        //add element
-        stChanges.push_back(ch);
-    }
-}
-
-
-
-void SimpleBroadcast1Hop::processPacket(Packet *pk)
-{
-    emit(packetReceivedSignal, pk);
-    EV_INFO << "Received packet: " << UdpSocket::getReceivedPacketInfo(pk) << endl;
-    printPacket(pk);
-
-    // Extract the sender's IP address
-    L3Address srcAddr, destAddr;
-    L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
-
-    Ptr<const L3AddressTagBase> addresses = pk->findTag<L3AddressReq>();
-    if (addresses == nullptr)
-        addresses = pk->findTag<L3AddressInd>();
-    if (addresses != nullptr) {
-        srcAddr = addresses->getSrcAddress();
-        destAddr = addresses->getDestAddress();
-    }
-
-    if ((srcAddr != loopbackAddress) && (srcAddr != myAddress)) {
-        // Process here
-        // Check if the packet contains ChangesBlock or Heartbeat data
-        if (pk->hasData<ChangesBlock>()) {
-            const auto& payload = pk->peekData<ChangesBlock>();
-//            std::cout << "---------" << myAddress << " Receive-----------------" <<  std::endl;
-            processChangesBlock(payload, srcAddr, destAddr);
-
-
-
-        } else
-        if (pk->hasData<Heartbeat>()) {
-            // Extract the Heartbeat payload
-            const auto& payload = pk->peekData<Heartbeat>();
-
-            processHeartbeat(payload, srcAddr, destAddr);
-        } else {
-            EV_WARN << "Received packet does not contain a Heartbeat payload." << endl;
-        }
-    }
-
-    delete pk;
-    numReceived++;
-}
-
-void SimpleBroadcast1Hop::handleStartOperation(LifecycleOperation *operation)
-{
-    clocktime_t start = std::max(startTime, getClockTime());
-    if ((stopTime < CLOCKTIME_ZERO) || (start < stopTime) || (start == stopTime && startTime == stopTime)) {
-        selfMsg->setKind(START);
-        scheduleClockEventAt(start, selfMsg);
-    }
-}
-
-void SimpleBroadcast1Hop::handleStopOperation(LifecycleOperation *operation)
-{
-    cancelEvent(selfMsg);
-    socket.close();
-    delayActiveOperationFinish(par("stopOperationTimeout"));
-}
-
-void SimpleBroadcast1Hop::handleCrashOperation(LifecycleOperation *operation)
-{
-    cancelClockEvent(selfMsg);
-    socket.destroy(); // TODO  in real operating systems, program crash detected by OS and OS closes sockets of crashed programs.
-}
 
 } // namespace inet
 

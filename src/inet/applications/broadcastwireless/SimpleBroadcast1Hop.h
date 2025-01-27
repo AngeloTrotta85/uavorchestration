@@ -17,9 +17,14 @@
 #define INET_APPLICATIONS_BROADCASTWIRELESS_SIMPLEBROADCAST1HOP_H_
 
 #include <vector>
+#include <queue>
 #include <map>
-#include <cmath>
-#include <deque>
+#include <unordered_set>
+#include <set>
+#include <tuple>
+#include <algorithm> // for std::find
+
+#include <numeric>  // for std::accumulate
 
 #include "inet/mobility/base/MovingMobilityBase.h"
 #include "inet/applications/base/ApplicationBase.h"
@@ -28,25 +33,11 @@
 #include "inet/networklayer/common/L3Address.h"
 
 #include "Heartbeat_m.h"
+#include "TaskREQ_m.h"
 
 namespace inet {
 
 extern template class ClockUserModuleMixin<ApplicationBase>;
-
-enum idField : uint8_t { //Field Id
-    fldActCPU,
-    fldMaxCPU,
-    fldActMEM,
-    fldMaxMEM,
-    fldPOS_x,
-    fldPOS_y,
-    fldGPU,
-    fldCAM,
-    fldLkCAM,
-    fldLkFLY,
-    fldLkGPU
-};
-
 
 /**
  * UDP application. See NED for more info.
@@ -76,12 +67,29 @@ public:
 
         L3Address nextHop_address;
         int num_hops;
+
         // Add other fields as needed
-        uint32_t lastSeqNumber[16]; //last received sequence number for each field
     };
 
-    struct Task
+    struct Task_generated_extra_info
     {
+        simtime_t generation_time;
+        std::vector<L3Address> deployable_nodes_at_generation;
+        std::vector<L3Address> decision_nodes_at_generation;
+    };
+
+    struct Task_deploy_extra_info
+    {
+        simtime_t deploy_time;
+        double node_pos_coord_x;
+        double node_pos_coord_y;
+    };
+
+    /*struct Task
+    {
+        L3Address gen_address;
+        int id;
+
         simtime_t start_timestamp;
         simtime_t end_timestamp;
         double req_computation;
@@ -94,12 +102,31 @@ public:
         bool req_lock_camera;
         bool req_lock_GPU;
         bool req_lock_flyengine;
+    };*/
+
+    struct Task_Deployed_stat_info
+    {
+        simtime_t deploy_time;
+        L3Address add_deploy_node;
+        double node_pos_coord_x;
+        double node_pos_coord_y;
+    };
+    struct Task_Generated_stat_info
+    {
+        simtime_t generation_time;
+        L3Address gen_address;
+        uint32_t id_task;
+        Strategy strategy;
+        std::vector<Task_Deployed_stat_info> extra_info;
     };
 
-
-protected:
+  protected:
     enum SelfMsgKinds { START = 1, SEND, STOP };
     enum TaskMsgKinds { NEW_T = 1 };
+    enum TaskForwardMsgKinds { FORWARD = 1 };
+    enum TaskAckMsgKinds { ACK_CHECK = 1 };
+
+    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE, HYBRID };
 
     // parameters
     std::vector<L3Address> destAddresses;
@@ -115,27 +142,76 @@ protected:
     bool hasCamera;
     bool hasGPU;
 
-    NodeInfo lastReport; // last report data
-    std::deque<Change> stChanges;
+
 
     // state
     UdpSocket socket;
     ClockEvent *selfMsg = nullptr;
-    //
-    std::vector<struct Task> assignedTask_list; //list of assigned task
-    //double availableActualMemory;
 
-    IMobility *mob;
-    L3Address myAddress;
+
 
     std::map<L3Address, NodeData> nodeDataMap;
+    //std::map<std::pair<L3Address, uint32_t>, bool> relayMap;
+
+    std::set<std::pair<L3Address, uint32_t>> relayedPackets;
+    //std::set<std::tuple<L3Address, uint32_t, uint32_t>> relayedPackets;
 
     // Task Generation
     ClockEvent *taskMsg = nullptr;
 
+    // Task Forwarding
+    ClockEvent *taskForwardMsg = nullptr;
+    double mean_tf = 0.001;    // 1 ms
+    double stddev_tf = 0.0002;
+    double maxForwardDelay = 0.001;
+    struct Forwarding_Task {
+        std::vector<L3Address> dests;
+        TaskREQ task;
+        std::vector<int> ttls;
+        uint numberOfSending;
+    };
+    std::queue<Forwarding_Task> forwardingTask_queue;
+
+    ClockEvent *taskAckMsg = nullptr;
+    uint numberOfMaxRetry = 1;
+    double ackTimer = 3.0*maxForwardDelay;
+    struct Ack_Forwarding_Task {
+        Forwarding_Task ft;
+        std::vector<L3Address> non_ack_dests;
+        std::vector<int> non_ack_ttls;
+        simtime_t sendingTimestamp;
+    };
+    std::vector<Ack_Forwarding_Task> ackVector;
+
     // statistics
+    int numTaskCreated = 0;
     int numSent = 0;
     int numReceived = 0;
+
+    int reqSent = 0;
+
+    bool ack_func = true;
+
+    //DisseminationType dissType = HIERARCHICAL;
+    DisseminationType dissType = PROGRESSIVE;
+    //DisseminationType dissType = HYBRID;
+
+    //static simsignal_t taskDeploymentTimeSignal;   // to record times
+
+public:
+
+    IMobility *mob;
+    L3Address myAddress;
+    int myAppAddr;
+
+    std::vector<TaskREQ> assignedTask_list; //list of assigned task
+    std::map<std::pair<L3Address, uint32_t>, Task_deploy_extra_info> extra_info_deploy_tasks;
+
+    //std::vector<std::pair<TaskREQ, simtime_t>> generatedTask_list; //list of assigned task
+    std::vector<TaskREQ> generatedTask_list; //list of assigned task
+    std::map<std::pair<L3Address, uint32_t>, Task_generated_extra_info> extra_info_generated_tasks;
+
+    virtual NodeData getMyNodeData();
 
   protected:
     virtual int numInitStages() const override { return NUM_INIT_STAGES; }
@@ -152,14 +228,27 @@ protected:
     virtual void setSocketOptions();
 
     virtual void processHeartbeat(const Ptr<const Heartbeat> payload, L3Address srcAddr, L3Address destAddr);
-    virtual void processChangesBlock(const Ptr<const ChangesBlock> payload, L3Address srcAddr, L3Address destAddr);
-    virtual void addChange(Change ch);
-    virtual Ptr<ChangesBlock> createPayload();
+    virtual Ptr<Heartbeat> createPayload();
     virtual void processStart();
     virtual void processSend();
     virtual void processStop();
 
+    //virtual Ptr<TaskREQmessage> createPayloadForTask(L3Address& finaldest, L3Address& nexthopdest, TaskREQ& task, int ttl);
+    virtual Ptr<TaskREQmessage> createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task);
+
+    virtual TaskREQ parseTask();
+    virtual bool isDeployFeasible(TaskREQ& task, NodeData node);
+    virtual std::vector<L3Address> checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes);
+    virtual std::vector<L3Address> checkDeployDestination(TaskREQ& task);
+    virtual void sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task, std::vector<int>& ttl);
+    virtual void deployTaskHere(TaskREQ& task);
+    virtual void manageNewTask(TaskREQ& task, bool generatedHereNow);
     virtual void generateNewTask();
+    virtual void processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr);
+    virtual void processTaskREQ_ACKmessage(const Ptr<const TaskREQ_ACKmessage>payload, L3Address srcAddr, L3Address destAddr);
+
+    virtual void forwardTask();
+    virtual void ackTask();
 
     virtual void handleStartOperation(LifecycleOperation *operation) override;
     virtual void handleStopOperation(LifecycleOperation *operation) override;
@@ -186,11 +275,59 @@ inline std::ostream& operator<<(std::ostream& os, const SimpleBroadcast1Hop::Nod
             << ", memoryMaxUsage: " << data.memoryMaxUsage
             << ", compActUsage: " << data.compActUsage
             << ", compMaxUsage: " << data.compMaxUsage
+            << ", hasGPU: " << data.hasGPU
+            << ", lockedGPU: " << data.lockedGPU
+            << ", hasCamera: " << data.hasCamera
+            << ", lockedCamera: " << data.lockedCamera
+            << ", lockedFly: " << data.lockedFly
             << " ||| nextHop_address: " << data.nextHop_address
             << ", num_hops: " << data.num_hops
-            << ", lastSeqNumber: ";
-    for (int i=0; i<16; i++) os << data.lastSeqNumber[i] << ",";
-    os << " }";
+            << " }";
+
+    return os;
+}
+
+// Correctly overload operator<< as a non-member function
+inline std::ostream& operator<<(std::ostream& os, const inet::TaskREQ& data)
+{
+    os << "{ GEN addr: " << data.getGen_ipAddress()
+            << ", ID: " << data.getId()
+            << ", Strategy: " << data.getStrategy()
+            << ", DevType: " << data.getDevType()
+            << ", start_timestamp: " << data.getStart_timestamp()
+            << ", end_timestamp: " << data.getEnd_timestamp()
+            << ", reqPosition: " << data.getReqPosition()
+            << ", pos_coord_x: " << data.getPos_coord_x()
+            << ", pos_coord_y: " << data.getPos_coord_y()
+            << ", range: " << data.getRange()
+            << ", req_lock_flyengine: " << data.getReq_lock_flyengine()
+            << ", reqCamera: " << data.getReqCamera()
+            << ", lockCamera: " << data.getLockCamera()
+            << ", reqGPU: " << data.getReqCPU()
+            << ", lockGPU: " << data.getLockGPU()
+            << ", reqCPU: " << data.getReqCPU()
+            << ", reqMemory: " << data.getReqMemory()
+            << " }";
+
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const std::tuple<L3Address, uint32_t, uint32_t>& data)
+{
+    os << "{ addr: " << std::get<0>(data)
+            << ", ID task: " << std::get<1>(data)
+            << ", ID send: " << std::get<2>(data)
+            << " }";
+
+    return os;
+}
+
+
+inline std::ostream& operator<<(std::ostream& os, const std::pair<L3Address, uint32_t>& data)
+{
+    os << "{ addr: " << data.first
+            << ", ID task: " << data.second
+            << " }";
 
     return os;
 }

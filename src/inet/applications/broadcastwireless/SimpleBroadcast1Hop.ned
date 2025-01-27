@@ -23,8 +23,8 @@ simple SimpleBroadcast1Hop like IApp
     parameters:
         double computationalPower @unit(MHz) = default(100MHz); 	// computational Power
         double availableMaxMemory @unit(MB) = default (100MB);			// available space for data/task
-        bool hasCamera = default(false); 
-        bool hasGPU = default(false); 
+        bool hasCamera = default(true); 
+        bool hasGPU = default(true); 
         
         bool taskGeneration = default(false); 
         volatile double taskCreationInterval @unit(s) = default(1s); 
@@ -54,11 +54,15 @@ simple SimpleBroadcast1Hop like IApp
         double stopOperationTimeout @unit(s) = default(2s);    // timeout value for lifecycle stop operation
         @signal[packetSent](type=inet::Packet);
         @signal[packetReceived](type=inet::Packet);
+        
+        
         @statistic[packetReceived](title="packets received"; source=packetReceived; record=count,"sum(packetBytes)","vector(packetBytes)"; interpolationmode=none);
         @statistic[throughput](title="throughput"; unit=bps; source="throughput(packetReceived)"; record=vector);
         @statistic[packetSent](title="packets sent"; source=packetSent; record=count,"sum(packetBytes)","vector(packetBytes)"; interpolationmode=none);
         @statistic[rcvdPkLifetime](title="received packet lifetime"; source="dataAge(packetReceived)"; unit=s; record=stats,vector; interpolationmode=none);
         @statistic[rcvdPkSeqNo](title="received packet sequence number"; source="appPkSeqNo(packetReceived)"; record=vector; interpolationmode=none);
+        
+
     gates:
         input socketIn @labels(UdpControlInfo/up);
         output socketOut @labels(UdpControlInfo/down);

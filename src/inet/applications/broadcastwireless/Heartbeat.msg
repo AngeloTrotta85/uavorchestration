@@ -68,21 +68,3 @@ class Heartbeat extends FieldsChunk
     NodeInfo nodeInfoList[];
     
 }
-
-class Change
-{
-    uint32_t sequenceNumber;
-    L3Address ipAddress;
-	int num_hops;
-    uint8_t parammeter;
-    double value;       
-} 
-
-class ChangesBlock extends FieldsChunk
-{
-    simtime_t timestamp;
-    uint32_t ChangesCount;
-    Change ChangesList[];    
-}
-
-

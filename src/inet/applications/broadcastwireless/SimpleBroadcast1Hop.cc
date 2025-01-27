@@ -36,15 +36,38 @@
 #include "inet/transportlayer/common/L4PortTag_m.h"
 #include "inet/common/ModuleAccess.h"
 
+
+static bool gEnableDebug = false;
+static inline void debugPrint(const char* fmt, ...)
+{
+    if (!gEnableDebug)
+        return;
+
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+    fflush(stdout);
+}
+
+//...
+//
+//// Then use:
+//debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::begin\n");
+
+
 namespace inet {
 
 Define_Module(SimpleBroadcast1Hop);
+
+//simsignal_t SimpleBroadcast1Hop::taskDeploymentTimeSignal = registerSignal("tDeploymentTimeSignal");
 
 SimpleBroadcast1Hop::~SimpleBroadcast1Hop()
 {
     cancelAndDelete(selfMsg);
     cancelAndDelete(taskMsg);
-    //test
+    cancelAndDelete(taskForwardMsg);
+    cancelAndDelete(taskAckMsg);
 }
 
 void SimpleBroadcast1Hop::initialize(int stage)
@@ -58,6 +81,8 @@ void SimpleBroadcast1Hop::initialize(int stage)
         WATCH(numReceived);
 
         WATCH_MAP(nodeDataMap);
+        WATCH_VECTOR(assignedTask_list);
+        WATCH_SET(relayedPackets);
 
         localPort = par("localPort");
         destPort = par("destPort");
@@ -75,6 +100,10 @@ void SimpleBroadcast1Hop::initialize(int stage)
             throw cRuntimeError("Invalid startTime/stopTime parameters");
         selfMsg = new ClockEvent("sendTimer");
         taskMsg = new ClockEvent("taskTimer");
+        taskForwardMsg = new ClockEvent("taskForwardTimer");
+        taskAckMsg = new ClockEvent("TaskAckTimer");
+
+
     }
     else if (stage == INITSTAGE_LAST){
         mob = check_and_cast<IMobility *>(this->getParentModule()->getSubmodule("mobility"));
@@ -84,8 +113,11 @@ void SimpleBroadcast1Hop::initialize(int stage)
         // Obtain the IP address
         myAddress = L3AddressResolver().addressOf(getParentModule(), L3AddressResolver::ADDR_IPv4);
 
+        myAppAddr = this->getParentModule()->getIndex();
+
         // Log or store the IP address
         EV_INFO << "My IP address is: " << myAddress.str() << endl;
+        EV_INFO << "My APP address is: " << myAppAddr << endl;
 
     }
 }
@@ -94,7 +126,491 @@ void SimpleBroadcast1Hop::finish()
 {
     recordScalar("packets sent", numSent);
     recordScalar("packets received", numReceived);
-    EV_INFO << myAddress.str() << " table size: " << nodeDataMap.size() << " Stack size: " << stChanges.size() << endl;
+
+    if (myAppAddr == 0) {
+        int nnodes = this->getParentModule()->getVectorSize();
+        double total_task_deployed = 0;
+        double total_task_generated = 0;
+
+        std::vector<TaskREQ> full_generatedTask_list;
+        std::map<std::pair<L3Address, uint32_t>, Task_generated_extra_info> full_generatedTask_info_list;
+
+        std::map<std::pair<L3Address, uint32_t>, int> n_deply_per_task;
+        std::map<std::pair<L3Address, uint32_t>, std::vector<double>> time_n_deply_per_task;
+        std::map<std::pair<L3Address, uint32_t>, std::vector<L3Address>> location_deply_per_task;
+
+        std::map<std::pair<L3Address, uint32_t>, Task_Generated_stat_info> extra_info_per_task;
+
+        for (int n = 0; n < nnodes; ++n) {
+            SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
+            L3Address n_ipaddr = appn->myAddress;
+
+            EV_INFO << "Host " << n << " has IP address: " << n_ipaddr.str() << endl;
+
+            full_generatedTask_list.insert(full_generatedTask_list.end(), appn->generatedTask_list.begin(), appn->generatedTask_list.end());
+            //full_generatedTask_info_list.insert(full_generatedTask_info_list.end(), appn->extra_info_generated_tasks.begin(), appn->extra_info_generated_tasks.end());
+            for (const auto & kv : appn->extra_info_generated_tasks) {
+                // Overwrite duplicates from appn->extra_info_generated_tasks:
+                full_generatedTask_info_list[kv.first] = kv.second;
+            }
+
+            for (auto& t : appn->generatedTask_list) {
+                std::pair<L3Address, uint32_t> key_map = std::make_pair(t.getGen_ipAddress(), t.getId());
+                n_deply_per_task[key_map] = 0;
+                time_n_deply_per_task[key_map] = std::vector<double>();
+                location_deply_per_task[key_map] = std::vector<L3Address>();
+                extra_info_per_task[key_map].generation_time = t.getGen_timestamp();
+                extra_info_per_task[key_map].gen_address = t.getGen_ipAddress();
+                extra_info_per_task[key_map].id_task = t.getId();
+                extra_info_per_task[key_map].strategy = t.getStrategy();
+            }
+
+            total_task_deployed += appn->assignedTask_list.size();
+            total_task_generated += appn->generatedTask_list.size();
+
+        }
+
+        for (int n = 0; n < nnodes; ++n) {
+            SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
+            L3Address n_ipaddr = appn->myAddress;
+
+            for (auto& t_deploy : appn->assignedTask_list) {
+                std::pair<L3Address, uint32_t> key_map = std::make_pair(t_deploy.getGen_ipAddress(), t_deploy.getId());
+
+                n_deply_per_task[key_map] += 1;
+
+
+                double time_to_deploy = (appn->extra_info_deploy_tasks[key_map].deploy_time - full_generatedTask_info_list[key_map].generation_time).dbl();
+                time_n_deply_per_task[key_map].push_back(time_to_deploy);
+                location_deply_per_task[key_map].push_back(n_ipaddr);
+
+                Task_Deployed_stat_info si;
+                si.add_deploy_node = n_ipaddr;
+                si.deploy_time = time_to_deploy;
+                si.node_pos_coord_x = appn->extra_info_deploy_tasks[key_map].node_pos_coord_x;
+                si.node_pos_coord_y = appn->extra_info_deploy_tasks[key_map].node_pos_coord_y;
+                extra_info_per_task[key_map].extra_info.push_back(si);
+            }
+        }
+
+
+        std::vector<L3Address> onlyExpected_all;
+        std::vector<L3Address> onlyActual_all;
+        std::vector<L3Address> both_all;
+        std::vector<double> onlyExpected_all_size;
+        std::vector<double> onlyActual_all_size;
+        std::vector<double> both_all_size;
+
+        //printf("Test1"); fflush(stdout);
+
+        for (int n = 0; n < nnodes; ++n) {
+            SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
+            L3Address n_ipaddr = appn->myAddress;
+
+            //printf("Test1_1"); fflush(stdout);
+
+            for (auto& gt : appn->generatedTask_list) {
+                std::pair<L3Address, uint32_t> key_map = std::make_pair(gt.getGen_ipAddress(), gt.getId());
+
+                std::vector<L3Address> expected_deployments = appn->extra_info_generated_tasks[key_map].deployable_nodes_at_generation;
+
+                //printf("Test1_1_1"); fflush(stdout);
+
+                std::vector<L3Address> actual_deployments;
+                for (int n2 = 0; n2 < nnodes; ++n2) {
+                    SimpleBroadcast1Hop *appn2 = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n2)->getSubmodule("app", 0));
+                    L3Address n_ipaddr2 = appn2->myAddress;
+
+                    if (appn2->extra_info_deploy_tasks.count(key_map) != 0) {
+                        actual_deployments.push_back(n_ipaddr2);
+                    }
+                }
+
+                //printf("Test1_1_2"); fflush(stdout);
+
+                if (actual_deployments.size() > 0) {
+
+                    std::vector<L3Address> onlyExpected;
+                    std::vector<L3Address> onlyActual;
+                    std::vector<L3Address> both;
+
+                    for (const auto &e : expected_deployments) {
+                        // Check if e is in actual_deployments
+                        bool found = (std::find(actual_deployments.begin(), actual_deployments.end(), e) != actual_deployments.end());
+                        if (found) {
+                            both.push_back(e);
+                        } else {
+                            onlyExpected.push_back(e);
+                        }
+                    }
+
+                    //printf("Test1_1_3"); fflush(stdout);
+
+                    for (const auto &a : actual_deployments) {
+                        // Check if a is in expected_deployments
+                        bool found = (std::find(expected_deployments.begin(), expected_deployments.end(), a)
+                                != expected_deployments.end());
+                        if (!found) {
+                            onlyActual.push_back(a);
+                        }
+                    }
+
+                    //printf("Test1_1_4"); fflush(stdout);
+
+                    onlyExpected_all.insert(onlyExpected_all.end(), onlyExpected.begin(), onlyExpected.end());
+                    onlyActual_all.insert(onlyActual_all.end(), onlyActual.begin(), onlyActual.end());
+                    both_all.insert(both_all.end(), both.begin(), both.end());
+
+                    //printf("Test1_1_5"); fflush(stdout);
+
+                    if ((onlyExpected.size() + both.size()) > 0) {
+                        double sss = onlyExpected.size() + both.size();
+                        double oe = onlyExpected.size() / sss;;
+                        double oa = onlyActual.size() / sss;
+                        double b = both.size() / sss;
+
+                        printf("TASK:%s-%d\n", key_map.first.str().c_str(), key_map.second);
+                        printf("OE:"); for (auto& el : onlyExpected) printf("%s - ", el.str().c_str()); printf("\n");
+                        printf("OA:"); for (auto& el : onlyActual) printf("%s - ", el.str().c_str()); printf("\n");
+                        printf("B:"); for (auto& el : both) printf("%s - ", el.str().c_str()); printf("\n");
+                        printf("onlyExpected: %f \n", oe);
+                        printf("onlyActual: %f \n", oa);
+                        printf("both: %f \n\n", b);
+
+                        onlyExpected_all_size.push_back(oe);
+                        onlyActual_all_size.push_back(oa);
+                        both_all_size.push_back(b);
+
+//                        onlyExpected_all_size.push_back(onlyExpected.size());
+//                        onlyActual_all_size.push_back(onlyActual.size());
+//                        both_all_size.push_back(both.size());
+                    }
+
+                    //printf("Test1_1_6"); fflush(stdout);
+                }
+
+            }
+
+            //printf("Test1_2"); fflush(stdout);
+        }
+
+        //printf("Test2"); fflush(stdout);
+
+
+        recordScalar("expected only deployment total", onlyExpected_all.size());
+        recordScalar("actual only deployment total", onlyActual_all.size());
+        recordScalar("expected and actual deployment total", both_all.size());
+
+
+        double expected_size = 0;
+        double actual_size = 0;
+        double both_size = 0;
+
+        if (onlyExpected_all_size.size() > 0) {
+            double sum = std::accumulate(onlyExpected_all_size.begin(), onlyExpected_all_size.end(), 0.0);
+            expected_size = sum / onlyExpected_all_size.size();
+        }
+        if (onlyActual_all_size.size() > 0) {
+            double sum = std::accumulate(onlyActual_all_size.begin(), onlyActual_all_size.end(), 0.0);
+            actual_size = sum / onlyActual_all_size.size();
+        }
+        if (both_all_size.size() > 0) {
+            double sum = std::accumulate(both_all_size.begin(), both_all_size.end(), 0.0);
+            both_size = sum / both_all_size.size();
+        }
+
+        recordScalar("expected only deployment size total", expected_size);
+        recordScalar("actual only deployment size total", actual_size);
+        recordScalar("expected and actual deployment size total", both_size);
+
+
+
+
+        int n_deployed_at_least_1 = 0;
+        for (const auto & kv : n_deply_per_task) {
+            if (kv.second > 1) n_deployed_at_least_1 += 1;
+        }
+
+        double ratio_task_deployed_at_least_1_total = 1;
+        if (total_task_generated > 0) ratio_task_deployed_at_least_1_total = n_deployed_at_least_1/total_task_generated;
+
+        double ratio_task_deployed_total = 1;
+        if (total_task_generated > 0) ratio_task_deployed_total = total_task_deployed/total_task_generated;
+
+        recordScalar("task generated total", total_task_generated);
+        recordScalar("task deployed total", total_task_deployed);
+        recordScalar("ratio task deployed total", ratio_task_deployed_total);
+        recordScalar("ratio task deployed at_least_1 total", ratio_task_deployed_at_least_1_total);
+
+        double avg_delay = 0;
+        std::vector<double> vall;
+        for (auto& el : time_n_deply_per_task){
+            vall.insert(vall.end(), el.second.begin(), el.second.end());
+        }
+        if (vall.size() > 0) {
+            double sum = std::accumulate(vall.begin(), vall.end(), 0.0);
+            avg_delay = sum / vall.size();
+        }
+        recordScalar("task deployed time avg", avg_delay);
+
+
+        for (auto& tg : full_generatedTask_list) {
+            std::pair<L3Address, uint32_t> key_map = std::make_pair(tg.getGen_ipAddress(), tg.getId());
+
+            printf("TASK:%s-%d DEPLOYED IN:\n", key_map.first.str().c_str(), key_map.second);
+            for (auto& dd : location_deply_per_task[key_map]) {
+                printf("node:%s - ", dd.str().c_str());
+            }
+            printf("\n");
+        }
+
+
+        //#########################################################################################
+        //#########################################################################################
+        //#########################################################################################
+
+        // remake of stats
+        printf("\n\nGOOD STATS\n");
+        double ok_total_task_generated = full_generatedTask_list.size();
+        double ok_total_task_deployed = 0;
+        double ok_task_deployed_atleast1_if_deployable = 0;
+        double ok_task_deployed_atleast1 = 0;
+        double ok_task_deployed_sum_if_deployable = 0;
+        double ok_total_task_generated_deployable = 0;
+
+        double ok_task_deployed_latency_sum = 0;
+
+        std::vector<double> ok_onlyExpected_all_size;
+        std::vector<double> ok_onlyActual_all_size;
+        std::vector<double> ok_both_all_size;
+        std::vector<double> ok_onlyExpectedDecision_all_size;
+        std::vector<double> ok_onlyActualDecision_all_size;
+        std::vector<double> ok_bothDecision_all_size;
+
+        for (auto& tg : full_generatedTask_list) {
+            std::pair<L3Address, uint32_t> key_map = std::make_pair(tg.getGen_ipAddress(), tg.getId());
+            Task_Generated_stat_info act_stat = extra_info_per_task[key_map];
+            Task_generated_extra_info task_stat = full_generatedTask_info_list[key_map];
+
+
+
+
+
+
+
+
+            printf("  TASK:%s-%d, strategy %d. Generated at time %s.\n",
+                    key_map.first.str().c_str(), key_map.second, act_stat.strategy, act_stat.generation_time.str().c_str());
+
+            std::vector<L3Address> expected_deployments = task_stat.deployable_nodes_at_generation;
+            printf("  Deployable nodes: ");
+            for (auto& dn : task_stat.deployable_nodes_at_generation){
+                printf("%s ", dn.str().c_str());
+            }
+            printf("\n");
+
+            std::vector<L3Address> decision_deployments = task_stat.decision_nodes_at_generation;
+            printf("  Decision where to deploy nodes: ");
+            for (auto& dn : task_stat.decision_nodes_at_generation){
+                printf("%s ", dn.str().c_str());
+            }
+            printf("\n");
+
+            std::vector<L3Address> actual_deployments;
+            printf("  Deployed in:\n");
+            for (auto& dd : act_stat.extra_info) {
+                ok_total_task_deployed++;
+                ok_task_deployed_latency_sum += dd.deploy_time.dbl();
+                actual_deployments.push_back(dd.add_deploy_node);
+
+                printf("    node:%s; deploy time:%s \n",
+                        dd.add_deploy_node.str().c_str(), dd.deploy_time.str().c_str());
+            }
+            //printf("\n");
+
+
+            if (task_stat.deployable_nodes_at_generation.size() > 0) {
+                ok_total_task_generated_deployable++;
+
+                if (act_stat.extra_info.size() > 0) {
+                    ok_task_deployed_atleast1_if_deployable++;
+                }
+                ok_task_deployed_sum_if_deployable += act_stat.extra_info.size();
+            }
+
+            if (act_stat.extra_info.size() > 0) {
+                ok_task_deployed_atleast1++;
+            }
+
+
+            if (actual_deployments.size() > 0) {
+
+                std::vector<L3Address> onlyExpected;
+                std::vector<L3Address> onlyActual;
+                std::vector<L3Address> both;
+
+                for (const auto &e : expected_deployments) {
+                    // Check if e is in actual_deployments
+                    bool found = (std::find(actual_deployments.begin(), actual_deployments.end(), e) != actual_deployments.end());
+                    if (found) {
+                        both.push_back(e);
+                    } else {
+                        onlyExpected.push_back(e);
+                    }
+                }
+
+                for (const auto &a : actual_deployments) {
+                    // Check if a is in expected_deployments
+                    bool found = (std::find(expected_deployments.begin(), expected_deployments.end(), a)
+                            != expected_deployments.end());
+                    if (!found) {
+                        onlyActual.push_back(a);
+                    }
+                }
+
+
+                if ((onlyExpected.size() + both.size()) > 0) {
+                    double sss = onlyExpected.size() + both.size();
+                    double oe = onlyExpected.size() / sss;;
+                    double oa = onlyActual.size() / sss;
+                    double b = both.size() / sss;
+
+                    printf("      TASK:%s-%d\n", key_map.first.str().c_str(), key_map.second);
+                    printf("      OE:"); for (auto& el : onlyExpected) printf("%s - ", el.str().c_str()); printf("\n");
+                    printf("      OA:"); for (auto& el : onlyActual) printf("%s - ", el.str().c_str()); printf("\n");
+                    printf("      B:"); for (auto& el : both) printf("%s - ", el.str().c_str()); printf("\n");
+                    printf("      onlyExpected: %f \n", oe);
+                    printf("      onlyActual: %f \n", oa);
+                    printf("      both: %f \n\n", b);
+
+                    ok_onlyExpected_all_size.push_back(oe);
+                    ok_onlyActual_all_size.push_back(oa);
+                    ok_both_all_size.push_back(b);
+
+                }
+            }
+
+            if (actual_deployments.size() > 0) {
+
+                std::vector<L3Address> onlyExpected;
+                std::vector<L3Address> onlyActual;
+                std::vector<L3Address> both;
+
+                for (const auto &e : decision_deployments) {
+                    // Check if e is in actual_deployments
+                    bool found = (std::find(actual_deployments.begin(), actual_deployments.end(), e) != actual_deployments.end());
+                    if (found) {
+                        both.push_back(e);
+                    } else {
+                        onlyExpected.push_back(e);
+                    }
+                }
+
+                for (const auto &a : actual_deployments) {
+                    // Check if a is in expected_deployments
+                    bool found = (std::find(decision_deployments.begin(), decision_deployments.end(), a)
+                            != decision_deployments.end());
+                    if (!found) {
+                        onlyActual.push_back(a);
+                    }
+                }
+
+
+                if ((onlyExpected.size() + both.size()) > 0) {
+                    double sss = onlyExpected.size() + both.size();
+                    double oe = onlyExpected.size() / sss;;
+                    double oa = onlyActual.size() / sss;
+                    double b = both.size() / sss;
+
+                    printf("      TASK:%s-%d\n", key_map.first.str().c_str(), key_map.second);
+                    printf("      Decision OE:"); for (auto& el : onlyExpected) printf("%s - ", el.str().c_str()); printf("\n");
+                    printf("      Decision OA:"); for (auto& el : onlyActual) printf("%s - ", el.str().c_str()); printf("\n");
+                    printf("      Decision B:"); for (auto& el : both) printf("%s - ", el.str().c_str()); printf("\n");
+                    printf("      Decision onlyExpected: %f \n", oe);
+                    printf("      Decision onlyActual: %f \n", oa);
+                    printf("      Decision both: %f \n\n", b);
+
+                    ok_onlyExpectedDecision_all_size.push_back(oe);
+                    ok_onlyActualDecision_all_size.push_back(oa);
+                    ok_bothDecision_all_size.push_back(b);
+
+                }
+            }
+
+
+            printf("\n");
+        }
+
+        double ok_avg_delay = 0;
+        if (ok_total_task_deployed > 0) {
+            ok_avg_delay = ok_task_deployed_latency_sum / ok_total_task_deployed;
+        }
+
+        double ok_deployed_deployable_atleast1_ratio = 0;
+        if (ok_total_task_generated_deployable > 0) {
+            ok_deployed_deployable_atleast1_ratio = ok_task_deployed_atleast1_if_deployable / ok_total_task_generated_deployable;
+        }
+
+        double ok_task_deployed_sum_if_deployable_avg = 0;
+        if (ok_total_task_generated_deployable > 0) {
+            ok_total_task_generated_deployable = ok_task_deployed_sum_if_deployable / ok_total_task_generated_deployable;
+        }
+
+        double ok_expected_size = 0;
+        double ok_actual_size = 0;
+        double ok_both_size = 0;
+        if (ok_onlyExpected_all_size.size() > 0) {
+            double sum = std::accumulate(ok_onlyExpected_all_size.begin(), ok_onlyExpected_all_size.end(), 0.0);
+            ok_expected_size = sum / ok_onlyExpected_all_size.size();
+        }
+        if (ok_onlyActual_all_size.size() > 0) {
+            double sum = std::accumulate(ok_onlyActual_all_size.begin(), ok_onlyActual_all_size.end(), 0.0);
+            ok_actual_size = sum / ok_onlyActual_all_size.size();
+        }
+        if (ok_both_all_size.size() > 0) {
+            double sum = std::accumulate(ok_both_all_size.begin(), ok_both_all_size.end(), 0.0);
+            ok_both_size = sum / ok_both_all_size.size();
+        }
+
+
+
+
+        double ok_expectedDecision_size = 0;
+        double ok_actualDecision_size = 0;
+        double ok_bothDecision_size = 0;
+        if (ok_onlyExpectedDecision_all_size.size() > 0) {
+            double sum = std::accumulate(ok_onlyExpectedDecision_all_size.begin(), ok_onlyExpectedDecision_all_size.end(), 0.0);
+            ok_expectedDecision_size = sum / ok_onlyExpectedDecision_all_size.size();
+        }
+        if (ok_onlyActualDecision_all_size.size() > 0) {
+            double sum = std::accumulate(ok_onlyActualDecision_all_size.begin(), ok_onlyActualDecision_all_size.end(), 0.0);
+            ok_actualDecision_size = sum / ok_onlyActualDecision_all_size.size();
+        }
+        if (ok_bothDecision_all_size.size() > 0) {
+            double sum = std::accumulate(ok_bothDecision_all_size.begin(), ok_bothDecision_all_size.end(), 0.0);
+            ok_bothDecision_size = sum / ok_bothDecision_all_size.size();
+        }
+
+        // #################
+
+        recordScalar("OK - task deployed time avg", ok_avg_delay);
+        recordScalar("OK - task generated number", ok_total_task_generated);
+        recordScalar("OK - task deployable generated number", ok_total_task_generated_deployable);
+        recordScalar("OK - task total deployment number", ok_total_task_deployed);
+        recordScalar("OK - task total deployment at least 1 number", ok_task_deployed_atleast1);
+        recordScalar("OK - task deployable total deployment at least 1 number", ok_task_deployed_atleast1_if_deployable);
+        recordScalar("OK - task deployable total deployment at least 1 number - Ratio", ok_deployed_deployable_atleast1_ratio);
+        recordScalar("OK - task deployable total deployment number for each task - AVG", ok_total_task_generated_deployable);
+
+        recordScalar("OK - expected only deployment size total", ok_expected_size);
+        recordScalar("OK - actual only deployment size total", ok_actual_size);
+        recordScalar("OK - expected and actual deployment size total", ok_both_size);
+
+        recordScalar("OK - expected Decision only deployment size total", ok_expectedDecision_size);
+        recordScalar("OK - actual Decision only deployment size total", ok_actualDecision_size);
+        recordScalar("OK - expected and actual Decision deployment size total", ok_bothDecision_size);
+    }
+
     ApplicationBase::finish();
 }
 
@@ -142,167 +658,78 @@ L3Address SimpleBroadcast1Hop::chooseDestAddr()
     return destAddresses[k];
 }
 
-Ptr<ChangesBlock> SimpleBroadcast1Hop::createPayload()
+Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 {
+    const auto& payload = makeShared<Heartbeat>();
 
-    //update NodeInfo with assigned tasks
+    payload->setChunkLength(B(par("messageLength")));
 
+    payload->setSequenceNumber(numSent);
+    payload->setIpAddress(myAddress);
+    payload->setCoord_x(mob->getCurrentPosition().x);
+    payload->setCoord_y(mob->getCurrentPosition().y);
+
+    payload->setCompMaxUsage(computationalPower);
+    payload->setMemoryMaxUsage(availableMaxMemory);
     double compActUsage = 0;
     double memActUsage = 0;
     bool lockedGPU = false;
     bool lockedCamera = false;
     bool lockedFly = false;
     for (size_t i = 0; i < assignedTask_list.size(); ++i) {
-        if ((simTime() < assignedTask_list[i].end_timestamp) && (simTime() >= assignedTask_list[i].start_timestamp)){
-            compActUsage += assignedTask_list[i].req_computation;
-            memActUsage += assignedTask_list[i].req_memory;
-            if (assignedTask_list[i].req_lock_GPU) lockedGPU = true;
-            if (assignedTask_list[i].req_lock_camera) lockedCamera = true;
-            if (assignedTask_list[i].req_lock_flyengine) lockedFly = true;
+        if ((simTime() < assignedTask_list[i].getEnd_timestamp()) && (simTime() >= assignedTask_list[i].getStart_timestamp())){
+            compActUsage += assignedTask_list[i].getReqCPU();
+            memActUsage += assignedTask_list[i].getReqMemory();
+            if (assignedTask_list[i].getLockGPU()) lockedGPU = true;
+            if (assignedTask_list[i].getLockCamera()) lockedCamera = true;
+            if (assignedTask_list[i].getReq_lock_flyengine()) lockedFly = true;
         }
     }
+    payload->setCompActUsage(compActUsage);
+    payload->setMemoryActUsage(memActUsage);
 
+    payload->setHasCamera(hasCamera);
+    payload->setHasGPU(hasGPU);
 
-    const auto& payload = makeShared<ChangesBlock>();
+    payload->setLockedCamera(lockedCamera);
+    payload->setLockedFly(lockedFly);
+    payload->setLockedGPU(lockedGPU);
 
-    //getting changes of THIS node...
-
-    uint32_t seq = lastReport.getSequenceNumber() + 1;
-
-    double deltaComp = 5; // acceptable delta without notification
-    double deltaMemory = 5;
-    double deltaCoord = 2; // percent (%)
-
-    //for debug:
-    bool go = true; //sent my own data even though noting has changed
-
-    //comparing actual values with last reported ones over deltas
-    Change ch;
-    ch.setSequenceNumber(seq);
-    ch.setIpAddress(myAddress);
-    ch.setNum_hops(0);
-    int stksize = stChanges.size();
-    if ((abs((lastReport.getCoord_x() - mob->getCurrentPosition().x)/lastReport.getCoord_x()) * 100) > deltaCoord ||
-            (abs((lastReport.getCoord_y() - mob->getCurrentPosition().y)/lastReport.getCoord_y()) * 100)  > deltaCoord  || go) {
-        //report new position
-        ch.setParammeter(fldPOS_x);
-        ch.setValue(mob->getCurrentPosition().x);
-        lastReport.setCoord_x(mob->getCurrentPosition().x);
-        stChanges.push_back(ch);
-
-        ch.setParammeter(fldPOS_y);
-        ch.setValue(mob->getCurrentPosition().y);
-        lastReport.setCoord_y(mob->getCurrentPosition().y);
-        stChanges.push_back(ch);
-
-    }
-
-    if (lastReport.getCompMaxUsage() != computationalPower  || go) {
-        //report Max CPU
-        ch.setParammeter(fldMaxCPU);
-        ch.setValue(computationalPower);
-        lastReport.setCompMaxUsage(computationalPower);
-        stChanges.push_back(ch);
-    }
-
-    if (lastReport.getMemoryMaxUsage() != availableMaxMemory  || go) {
-        //report MAX Memory
-        ch.setParammeter(fldMaxMEM);
-        ch.setValue(availableMaxMemory);
-        lastReport.setMemoryMaxUsage(availableMaxMemory);
-        stChanges.push_back(ch);
-
-    }
-
-    if (abs(lastReport.getCompActUsage() - compActUsage) > deltaComp  || go) {
-        //report CPU
-        ch.setParammeter(fldActCPU);
-        ch.setValue(compActUsage);
-        lastReport.setCompActUsage(compActUsage);
-        stChanges.push_back(ch);
-    }
-
-    if (abs(lastReport.getMemoryActUsage() - memActUsage) > deltaMemory  || go) {
-        //report Memory
-        ch.setParammeter(fldActMEM);
-        ch.setValue(memActUsage);
-        lastReport.setMemoryActUsage(memActUsage);
-        stChanges.push_back(ch);
-
-    }
-
-    if (lastReport.getHasCamera() != hasCamera  || go) {
-        //report Camera
-        ch.setParammeter(fldCAM);
-        ch.setValue((hasCamera ? 1 : 0));
-        lastReport.setHasCamera(hasCamera);
-        stChanges.push_back(ch);
-    }
-
-    if (lastReport.getHasGPU() != hasGPU  || go) {
-        //report GPU
-        ch.setParammeter(fldGPU);
-        ch.setValue((hasGPU? 1 : 0));
-        lastReport.setHasGPU(hasGPU);
-        stChanges.push_back(ch);
-    }
-
-    if (lastReport.getLockedCamera() != lockedCamera  || go) {
-        //report locked camera
-        ch.setParammeter(fldLkCAM);
-        ch.setValue((lockedCamera ? 1 : 0));
-        lastReport.setLockedCamera(lockedCamera);
-        stChanges.push_back(ch);
-    }
-
-    if (lastReport.getLockedFly() != lockedFly  || go) {
-        //report locked fly
-        ch.setParammeter(fldLkFLY);
-        ch.setValue((lockedFly ? 1 : 0));
-        lastReport.setLockedFly(lockedFly);
-        stChanges.push_back(ch);
-
-    }
-
-    if (lastReport.getLockedGPU() != lockedGPU  || go) {
-        //report locked GPU
-        ch.setParammeter(fldLkGPU);
-        ch.setValue((lockedGPU ? 1 : 0));
-        lastReport.setLockedGPU(lockedGPU);
-        stChanges.push_back(ch);
-    }
-
-    if (stksize < stChanges.size()) {
-        lastReport.setSequenceNumber(seq);
-    }
-
-    //avoid packet oversize
     int i = 0;
-    while (!stChanges.empty() && i<1000){
-        Change cht = stChanges.at(0);
-        //std::cout << cht.getIpAddress() << " | " << ((int) cht.getParammeter()) << " | " << cht.getValue() << endl;
-        payload->appendChangesList(cht);
-        stChanges.pop_front();
+    payload->setNodeInfoListArraySize(nodeDataMap.size());
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+        L3Address ipAddr = it->first;
+        NodeData data = it->second;
+
+        NodeInfo new_NodeInfo;
+        new_NodeInfo.setTimestamp(data.timestamp);
+        new_NodeInfo.setSequenceNumber(data.sequenceNumber);
+        new_NodeInfo.setIpAddress(data.address);
+        new_NodeInfo.setCoord_x(data.coord_x);
+        new_NodeInfo.setCoord_y(data.coord_y);
+        new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
+        new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
+        new_NodeInfo.setCompActUsage(data.compActUsage);
+        new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
+
+        new_NodeInfo.setNextHop_address(data.nextHop_address);
+        new_NodeInfo.setNum_hops(data.num_hops);
+
+        new_NodeInfo.setHasGPU(data.hasGPU);
+        new_NodeInfo.setHasCamera(data.hasCamera);
+
+        new_NodeInfo.setLockedCamera(data.lockedCamera);
+        new_NodeInfo.setLockedGPU(data.lockedGPU);
+        new_NodeInfo.setLockedFly(data.lockedFly);
+
+        payload->setNodeInfoList(i, new_NodeInfo);
+
         i++;
-    }
-
-
-
-    payload->setChangesCount(payload->getChangesListArraySize());
-    if (payload->getChangesListArraySize() > 0) {
-        EV_INFO << "sending  " << payload->getChangesListArraySize() << " changes " << std::endl;
     }
 
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
-    //payload size
-    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
-
-    payload->setChunkLength(B(s));
-
     return payload;
-
-
 }
 
 void SimpleBroadcast1Hop::sendPacket()
@@ -314,10 +741,55 @@ void SimpleBroadcast1Hop::sendPacket()
         packet->addTag<FragmentationReq>()->setDontFragment(true);
 
     const auto& payload = createPayload();
+
+//    const auto& payload = makeShared<Heartbeat>();
+//    payload->setChunkLength(B(par("messageLength")));
+//
+//    payload->setSequenceNumber(numSent);
+//    payload->setIpAddress(myAddress);
+//    payload->setCoord_x(mob->getCurrentPosition().x);
+//    payload->setCoord_y(mob->getCurrentPosition().y);
+//
+//    payload->setCompMaxUsage(computationalPower);
+//    payload->setMemoryMaxUsage(availableMaxMemory);
+//    double compActUsage = 0;
+//    double memActUsage = 0;
+//    for (size_t i = 0; i < assignedTask_list.size(); ++i) {
+//        if ((simTime() < assignedTask_list[i].end_timestamp) && (simTime() >= assignedTask_list[i].start_timestamp)){
+//            compActUsage += assignedTask_list[i].req_computation;
+//            memActUsage += assignedTask_list[i].req_memory;
+//        }
+//    }
+//    payload->setCompActUsage(compActUsage);
+//    payload->setMemoryActUsage(memActUsage);
+//
+//    int i = 0;
+//    payload->setNodeInfoListArraySize(nodeDataMap.size());
+//    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+//        L3Address ipAddr = it->first;
+//        NodeData data = it->second;
+//
+//        NodeInfo new_NodeInfo;
+//        new_NodeInfo.setTimestamp(data.timestamp);
+//        new_NodeInfo.setSequenceNumber(data.sequenceNumber);
+//        new_NodeInfo.setIpAddress(data.address);
+//        new_NodeInfo.setCoord_x(data.coord_x);
+//        new_NodeInfo.setCoord_y(data.coord_y);
+//        new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
+//        new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
+//        new_NodeInfo.setCompActUsage(data.compActUsage);
+//        new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
+//
+//        new_NodeInfo.setNextHop_address(data.nextHop_address);
+//        new_NodeInfo.setNum_hops(data.num_hops);
+//
+//        payload->setNodeInfoList(i, new_NodeInfo);
+//
+//        i++;
+//    }
+//
+//    payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
     packet->insertAtBack(payload);
-
-    EV_INFO << "Packet size: " << packet->getTotalLength() << std::endl;
-
     L3Address destAddr = chooseDestAddr();
     emit(packetSentSignal, packet);
     socket.sendTo(packet, destAddr, destPort);
@@ -351,8 +823,17 @@ void SimpleBroadcast1Hop::processStart()
         if (par("taskGeneration").boolValue()){
             taskMsg->setKind(NEW_T);
             clocktime_t d = par("taskCreationInterval");
-            scheduleClockEventAfter(d, taskMsg);
+            scheduleClockEventAfter(d*3, taskMsg);
         }
+        taskForwardMsg->setKind(FORWARD);
+        //scheduleClockEventAfter(truncnormal(mean_tf, stddev_tf), taskForwardMsg);
+
+
+        if (ack_func){
+            taskAckMsg->setKind(ACK_CHECK);
+            scheduleClockEventAfter(truncnormal(1, 0.01), taskAckMsg);
+        }
+
     }
     else {
         if (stopTime >= CLOCKTIME_ZERO) {
@@ -385,9 +866,780 @@ void SimpleBroadcast1Hop::processStop()
     }
 }
 
+void SimpleBroadcast1Hop::ackTask()
+{
+    debugPrint("SimpleBroadcast1Hop::ackTask::begin\n");
+    simtime_t nowT = simTime();
+
+    for (auto it = ackVector.begin(); it != ackVector.end(); ) {
+        if ((nowT - it->sendingTimestamp).dbl() > ackTimer)
+        {
+            if (forwardingTask_queue.empty()) {
+                scheduleClockEventAfter(uniform(0, maxForwardDelay), taskForwardMsg);
+            }
+
+            // Enqueue the task to re-send it
+            Forwarding_Task ft;
+            ft.dests = it->non_ack_dests;
+            ft.task = it->ft.task;
+            ft.ttls = it->non_ack_ttls;
+            ft.numberOfSending = 0;
+            forwardingTask_queue.push(ft);
+
+            // Remove the element from ackVector; erase returns an iterator
+            // pointing to the next element after the erased one
+            it = ackVector.erase(it);
+
+            EV_INFO << "ACK scaduto sending TASK again" << endl;
+        }
+        else
+        {
+            // Only advance if we haven't erased
+            ++it;
+        }
+    }
+    debugPrint("SimpleBroadcast1Hop::ackTask::end\n");
+}
+
+void SimpleBroadcast1Hop::forwardTask()
+{
+    // Dequeue
+    if (!forwardingTask_queue.empty()) {
+        // Access the front task
+        Forwarding_Task& frontTask = forwardingTask_queue.front();
+
+        // Forward to all destinations
+        sendTaskTo(frontTask.dests, frontTask.task, frontTask.ttls);
+
+        if (ack_func) {
+            if (frontTask.numberOfSending < numberOfMaxRetry) {
+
+                //adding it to the ack list
+                Ack_Forwarding_Task newAFT;
+                newAFT.ft = frontTask;
+                newAFT.ft.numberOfSending += 1;
+                newAFT.non_ack_dests.insert(newAFT.non_ack_dests.begin(), frontTask.dests.begin(), frontTask.dests.end());
+                newAFT.non_ack_ttls.insert(newAFT.non_ack_ttls.begin(), frontTask.ttls.begin(), frontTask.ttls.end());
+                newAFT.sendingTimestamp = simTime();
+                ackVector.push_back(newAFT);
+            }
+        }
+
+        // Once handled, pop it
+        forwardingTask_queue.pop();
+        EV_INFO << "Forwarded one task. Queue size now: " << forwardingTask_queue.size() << endl;
+    }
+}
+
+TaskREQ SimpleBroadcast1Hop::parseTask() // TODO
+{
+    TaskREQ newTask = TaskREQ();
+
+    //EXAMPLE OF SCANPEOPLE
+    newTask.setStrategy(STRATEGY_FORALL);
+    //newTask.setStrategy(STRATEGY_MANY);
+    //newTask.setStrategy(STRATEGY_EXISTS);
+    //newTask.setStrategy(STRATEGY_EXAC);
+
+    newTask.setDevType(DEVTYPE_DRONE);
+    newTask.setReqPosition(true);
+    newTask.setPos_coord_x(uniform(630, 1900));//(1560);
+    newTask.setPos_coord_y(uniform(630, 1900)); //(1560);
+    newTask.setRange(630);
+    newTask.setReqCamera(true);
+    newTask.setReqCPU(3);
+    newTask.setReqMemory(2);
+    //newTask.setReq_lock_flyengine(true);
+
+    newTask.setStart_timestamp(simTime());
+    newTask.setEnd_timestamp(simTime()+1000000);
+
+    newTask.setId(numTaskCreated);
+    numTaskCreated++;
+    newTask.setGen_ipAddress(myAddress);
+    newTask.setGen_timestamp(simTime());
+
+    return newTask;
+}
+
+static bool isInsideCircle(double xCenter, double yCenter, double radius,
+                    double xPoint, double yPoint)
+{
+    double dx = xPoint - xCenter;
+    double dy = yPoint - yCenter;
+    double distSquared = dx * dx + dy * dy;
+    double radiusSquared = radius * radius;
+    return (distSquared <= radiusSquared);
+}
+
+
+bool SimpleBroadcast1Hop::isDeployFeasible(TaskREQ& task, NodeData node) {
+    bool ris = true;
+
+    //check coords
+    if (task.getReqPosition() && (!isInsideCircle(task.getPos_coord_x(), task.getPos_coord_y(), task.getRange(), node.coord_x, node.coord_y)))
+        ris = false;
+
+    //check GPU
+    if ((task.getReqCPU() && node.lockedGPU) || (task.getReqCPU() && !node.hasGPU))
+        ris = false;
+
+    //check locked Fly
+    if (task.getReq_lock_flyengine() && node.lockedFly)
+        return false;
+
+    //check camera
+    if ((task.getReqCamera() && node.lockedCamera) || (task.getReqCamera() && !node.hasCamera))
+        ris = false;
+
+    //check CPU
+    if ((task.getReqCPU() + node.compActUsage) > node.compMaxUsage)
+        ris = false;
+
+
+    //check Memory
+    if ((task.getReqMemory() + node.memoryActUsage) > node.memoryMaxUsage)
+        ris = false;
+
+    return ris;
+}
+
+std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
+{
+    std::vector<L3Address> ris;
+
+    std::map<L3Address, NodeData> nodeDataMap_feasible;
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+        if (isDeployFeasible(task, it->second))
+            nodeDataMap_feasible[it->first] = it->second;
+    }
+
+    size_t mapSize = nodeDataMap_feasible.size();
+
+//    if (mapSize == 0){
+//        return Ipv4Address::UNSPECIFIED_ADDRESS;
+//    }
+//    else {
+//
+//        //choose randomly
+//        int randomIndex = intuniform(0, mapSize - 1);
+//        auto it = nodeDataMap_feasible.begin();
+//        std::advance(it, randomIndex);
+//        EV_INFO << "Deploying TASK to: " << it->first << endl;
+//        return it->first;
+//    }
+
+    if (mapSize != 0){
+        if ((task.getStrategy() == STRATEGY_FORALL) || (task.getStrategy() == STRATEGY_MANY)) {
+            for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap_feasible.begin(); it != nodeDataMap_feasible.end(); ++it) {
+                ris.push_back(it->first);
+            }
+        }
+        else {
+            //choose randomly
+            int randomIndex = intuniform(0, mapSize - 1);
+            auto it = nodeDataMap_feasible.begin();
+            std::advance(it, randomIndex);
+            EV_INFO << "Deploying TASK to: " << it->first << endl;
+            //return it->first;
+            ris.push_back(it->first);
+        }
+
+    }
+
+    return ris;
+}
+
+SimpleBroadcast1Hop::NodeData SimpleBroadcast1Hop::getMyNodeData(){
+    NodeData mydata;
+
+    double compActUsage = 0;
+    double memActUsage = 0;
+    bool lockedGPU = false;
+    bool lockedCamera = false;
+    bool lockedFly = false;
+    for (size_t i = 0; i < assignedTask_list.size(); ++i) {
+        if ((simTime() < assignedTask_list[i].getEnd_timestamp()) && (simTime() >= assignedTask_list[i].getStart_timestamp())){
+            compActUsage += assignedTask_list[i].getReqCPU();
+            memActUsage += assignedTask_list[i].getReqMemory();
+            if (assignedTask_list[i].getLockGPU()) lockedGPU = true;
+            if (assignedTask_list[i].getLockCamera()) lockedCamera = true;
+            if (assignedTask_list[i].getReq_lock_flyengine()) lockedFly = true;
+        }
+    }
+
+    mydata.timestamp = simTime();
+    mydata.sequenceNumber = numSent;
+    mydata.address = myAddress;
+    mydata.coord_x = mob->getCurrentPosition().x;
+    mydata.coord_y = mob->getCurrentPosition().y;
+    mydata.memoryActUsage = memActUsage;
+    mydata.memoryMaxUsage = availableMaxMemory;
+    mydata.compActUsage = compActUsage;
+    mydata.compMaxUsage = computationalPower;
+    mydata.hasCamera = hasCamera;
+    mydata.lockedCamera = lockedCamera;
+    mydata.hasGPU = hasGPU;
+    mydata.lockedGPU = lockedGPU;
+    mydata.lockedFly = lockedFly;
+    mydata.nextHop_address = myAddress;
+    mydata.num_hops = 0;
+
+    return mydata;
+}
+
+std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task)
+{
+    std::map<L3Address, NodeData> nodeDataMap_all;
+    NodeData mydata = getMyNodeData();
+
+//    double compActUsage = 0;
+//    double memActUsage = 0;
+//    bool lockedGPU = false;
+//    bool lockedCamera = false;
+//    bool lockedFly = false;
+//    for (size_t i = 0; i < assignedTask_list.size(); ++i) {
+//        if ((simTime() < assignedTask_list[i].getEnd_timestamp()) && (simTime() >= assignedTask_list[i].getStart_timestamp())){
+//            compActUsage += assignedTask_list[i].getReqCPU();
+//            memActUsage += assignedTask_list[i].getReqMemory();
+//            if (assignedTask_list[i].getLockGPU()) lockedGPU = true;
+//            if (assignedTask_list[i].getLockCamera()) lockedCamera = true;
+//            if (assignedTask_list[i].getReq_lock_flyengine()) lockedFly = true;
+//        }
+//    }
+//
+//    mydata.timestamp = simTime();
+//    mydata.sequenceNumber = numSent;
+//    mydata.address = myAddress;
+//    mydata.coord_x = mob->getCurrentPosition().x;
+//    mydata.coord_y = mob->getCurrentPosition().y;
+//    mydata.memoryActUsage = memActUsage;
+//    mydata.memoryMaxUsage = availableMaxMemory;
+//    mydata.compActUsage = compActUsage;
+//    mydata.compMaxUsage = computationalPower;
+//    mydata.hasCamera = hasCamera;
+//    mydata.lockedCamera = lockedCamera;
+//    mydata.hasGPU = hasGPU;
+//    mydata.lockedGPU = lockedGPU;
+//    mydata.lockedFly = lockedFly;
+//    mydata.nextHop_address = myAddress;
+//    mydata.num_hops = 0;
+
+    nodeDataMap_all[myAddress] = mydata;
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+        nodeDataMap_all[it->first] = it->second;
+    }
+
+    EV_INFO << "SimpleBroadcast1Hop::checkDeployDestination. ALL DEVICES" << endl;
+    for (auto& el : nodeDataMap_all) {
+        EV_INFO << el.first << " | " << el.second << endl;
+    }
+
+    return checkDeployDestinationAmong(task, nodeDataMap_all);
+
+
+//    size_t mapSize = nodeDataMap.size();
+//    double r = uniform(0, 1);
+//    if ((r < 0.2) || (mapSize == 0)) {
+//        L3Address loopbackAddress("127.0.0.1");
+//        EV_INFO << "Deploying TASK locally: " << loopbackAddress << endl;
+//        return loopbackAddress;
+//    }
+//    else {
+//        int randomIndex = intuniform(0, mapSize - 1);
+//        auto it = nodeDataMap.begin();
+//        std::advance(it, randomIndex);
+//        EV_INFO << "Deploying TASK to: " << it->first << endl;
+//        return it->first;
+//    }
+
+}
+
+
+Ptr<TaskREQmessage> SimpleBroadcast1Hop::createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task)
+{
+    const auto& payload = makeShared<TaskREQmessage>();
+
+    payload->setChunkLength(B(par("messageLength"))); // TODO
+
+    payload->setIdReqMessage(reqSent);
+
+    payload->setDestDetailArraySize(finaldest_next_ttl.size());
+    for (int i = 0; i < finaldest_next_ttl.size(); ++i) {
+        DestDetail destDetail;
+        destDetail.setDest_ipAddress(std::get<0>(finaldest_next_ttl[i]));
+        destDetail.setNextHop_ipAddress(std::get<1>(finaldest_next_ttl[i]));
+        destDetail.setTtl(std::get<2>(finaldest_next_ttl[i]));
+
+        payload->setDestDetail(i, destDetail);
+    }
+
+//    payload->setDest_ipAddress(finaldest);
+//    payload->setNextHop_ipAddress(nexthopdest);
+//    payload->setTtl(ttl);  // TODO
+
+    payload->setTask(task);
+
+    return payload;
+}
+
+void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task, std::vector<int>& ttl)
+{
+    std::vector<std::tuple<L3Address, L3Address, int>> dest_next_ttl;
+
+    int i = 0;
+    for (auto& d : dest){
+        if (nodeDataMap.count(d) != 0) {
+            NodeData data = nodeDataMap[d];
+            dest_next_ttl.push_back(std::make_tuple(d, data.nextHop_address, ttl[i]));
+        }
+        i++;
+    }
+
+    if (dest_next_ttl.size() > 0) {
+        std::ostringstream str;
+        str << "Task-" << task.getGen_ipAddress().str() << "-" << task.getId() << "-" << reqSent;
+        Packet *packet = new Packet(str.str().c_str());
+        if (dontFragment)
+            packet->addTag<FragmentationReq>()->setDontFragment(true);
+
+        //const auto& payload = createPayloadForTask(dest, destAddr,  task, ttl);
+        const auto& payload = createPayloadForTask(dest_next_ttl, task);
+
+        packet->insertAtBack(payload);
+
+        for (auto& dd : dest_next_ttl)
+            EV_INFO << "Sending TASK to: " << std::get<0>(dd) << " passing from " << std::get<1>(dd) << " with ttl " << std::get<2>(dd)<< endl;
+
+        EV_INFO << "SENDING Packet name: " << packet->getName() << ", length: " << packet->getTotalLength() << "\n";
+        EV_INFO << "SENDING Tags:\n";
+        for (int i = 0; i < packet->getNumTags(); i++) {
+            auto tag = packet->getTag(i);
+            EV_INFO << "  Tag " << i << ": " << tag->str() << "\n";
+        }
+
+        socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+
+        //reqSent++;
+    }
+    else {
+        EV_WARN << "SimpleBroadcast1Hop::sendTaskTo NO DESTINATION FOUND FOR THE TASK" << endl;
+    }
+
+
+//    if (nodeDataMap.count(dest) != 0) {
+//        NodeData data = nodeDataMap[dest];
+//
+//        std::ostringstream str;
+//        str << "Task-" << task.getGen_ipAddress().str() << "-" << task.getId() << "-" << reqSent;
+//        Packet *packet = new Packet(str.str().c_str());
+//        if (dontFragment)
+//            packet->addTag<FragmentationReq>()->setDontFragment(true);
+//
+//
+//        L3Address destAddr = data.nextHop_address;
+//
+//        const auto& payload = createPayloadForTask(dest, destAddr,  task, ttl);
+//
+//        packet->insertAtBack(payload);
+//
+//        EV_INFO << "Sending TASK to: " << dest << " passing from " << destAddr << endl;
+//
+//        //emit(packetSentSignal, packet);
+//        socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+//
+//        reqSent++;
+//    }
+//    else {
+//        EV_WARN << "SimpleBroadcast1Hop::sendTaskTo NO DESTINATION FOUND FOR THE TASK" << endl;
+//    }
+}
+
+void SimpleBroadcast1Hop::deployTaskHere(TaskREQ& task)
+{
+    //Check if already deployed
+    for (auto& at : assignedTask_list){
+        if ((at.getGen_ipAddress() == task.getGen_ipAddress()) && (at.getId() == task.getId())) {
+            return;
+        }
+    }
+    EV_INFO << "Deploying TASK NOW: " << task << endl;
+    assignedTask_list.push_back(task);
+
+    Task_deploy_extra_info extra;
+    extra.deploy_time = simTime();
+    extra.node_pos_coord_x = mob->getCurrentPosition().x;
+    extra.node_pos_coord_y = mob->getCurrentPosition().y;
+    extra_info_deploy_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
+
+    // If not already deployed, record the deployment time
+    simtime_t generationTime = task.getGen_timestamp();
+    simtime_t deployTime = simTime();
+    simtime_t timeToDeploy = deployTime - generationTime;
+
+    // Emit the deployment time
+    //emit(taskDeploymentTimeSignal, timeToDeploy.dbl());  // record as double (in seconds)
+
+}
+
+void SimpleBroadcast1Hop::manageNewTask(TaskREQ& task, bool generatedHereNow = false)
+{
+    L3Address loopbackAddress("127.0.0.1");
+    std::vector<L3Address> deployDest = checkDeployDestination(task);
+    std::vector<L3Address> deployDest_out;
+    std::vector<int> ttls;
+
+    if (generatedHereNow) {
+        Task_generated_extra_info extra;
+        extra.generation_time = simTime();
+
+        int nnodes = this->getParentModule()->getVectorSize();
+        for (int n = 0; n < nnodes; ++n) {
+            SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
+            L3Address n_ipaddr = appn->myAddress;
+            NodeData n_data = appn->getMyNodeData();
+
+            if (isDeployFeasible(task, n_data) ) {
+                extra.deployable_nodes_at_generation.push_back(n_ipaddr);
+            }
+        }
+
+        extra.decision_nodes_at_generation.insert(extra.decision_nodes_at_generation.end(), deployDest.begin(), deployDest.end());
+
+        extra_info_generated_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
+    }
+
+    //if (deployDest == Ipv4Address::UNSPECIFIED_ADDRESS) {
+    if (deployDest.size() == 0) {
+        EV_INFO << "NO place where to deploy TASK!" << endl;
+    }
+    else {
+        EV_INFO << "Sending TASK to these destinations:" << endl;
+        for (auto& dest : deployDest) {
+            EV_INFO << "Dest:" << dest << endl;
+            if ((dest == loopbackAddress) || (dest == myAddress)) {
+                deployTaskHere(task);
+            }
+            else {
+                deployDest_out.push_back(dest);
+                ttls.push_back(10);
+                //sendTaskTo(dest, task, 10); // TODO
+            }
+        }
+        if (deployDest_out.size() > 0) {
+            //sendTaskTo(deployDest_out, task, ttls);
+
+            if (forwardingTask_queue.empty()) {
+                scheduleClockEventAfter(uniform(0, maxForwardDelay), taskForwardMsg);
+            }
+
+            /*
+            for (int i = 0; i < deployDest_out.size(); ++i) {
+                // Enqueue
+                Forwarding_Task ft;
+                ft.dests.push_back(deployDest_out[i]);
+                ft.task = task;
+                ft.ttls.push_back(ttls[i]);
+                forwardingTask_queue.push(ft);
+            }
+            */
+
+            // Enqueue
+            Forwarding_Task ft;
+            ft.dests = deployDest_out;
+            ft.task = task;
+            ft.ttls = ttls;
+            ft.numberOfSending = 0;
+            forwardingTask_queue.push(ft);
+
+
+            //reqSent++;
+        }
+    }
+}
+
+void SimpleBroadcast1Hop::processTaskREQ_ACKmessage(const Ptr<const TaskREQ_ACKmessage>payload, L3Address srcAddr, L3Address destAddr)
+{
+    debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::begin\n");
+    TaskREQ t = payload->getTask();
+
+    if (payload->getDest_ipAddress() == myAddress) {
+
+        EV_INFO << myAddress << " - RECEIVED TASK ACK. " << t.getGen_ipAddress() << "-" << t.getId() << endl;
+
+        debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1\n");
+
+        for (auto it = ackVector.begin(); it != ackVector.end(); )
+        {
+            debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_1\n");
+
+            if ((t.getGen_ipAddress() == it->ft.task.getGen_ipAddress()) && (t.getId() == it->ft.task.getId())) {
+
+                debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_1_1\n");
+
+                int idx_erase = -1;
+                int idx = 0;
+                for (auto& el : it->non_ack_dests) {
+                    if (payload->getSrc_ipAddress() == el) {
+                        idx_erase = idx;
+                    }
+                    idx++;
+                }
+
+                debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_1_2\n");
+
+                debugPrint("it->non_ack_dests size: %d \nit->non_ack_ttls size: %d \nidx_erase: %d \n \n",
+                        (int)it->non_ack_dests.size(), (int)it->non_ack_ttls.size(), idx_erase);
+
+                if (idx_erase >= 0) {
+                    it->non_ack_dests.erase(it->non_ack_dests.begin() + idx_erase);
+                    it->non_ack_ttls.erase(it->non_ack_ttls.begin() + idx_erase);
+                }
+
+                debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_1_3\n");
+
+                if (it->non_ack_dests.size() == 0) {
+                    // Remove the element from ackVector; erase returns an iterator
+                    // pointing to the next element after the erased one
+                    it = ackVector.erase(it);
+                }
+                else {
+                    ++it;
+                }
+
+                debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_1_4\n");
+            }
+            else
+            {
+                debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_1_5\n");
+                // Only advance if we haven't erased
+                ++it;
+            }
+
+            debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::1_2\n");
+        }
+
+    }
+
+    debugPrint("SimpleBroadcast1Hop::processTaskREQ_ACKmessage::end\n");
+
+}
+
+void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr)
+{
+    std::vector<L3Address> deployDest_out;
+    std::vector<int> ttlDest_out;
+    TaskREQ t = payload->getTask();
+    bool to_ack = false;
+
+    EV_INFO << myAddress << " - RECEIVED TASK. " << t.getGen_ipAddress() << "-" << t.getId() << "-" << payload->getIdReqMessage() << endl;
+
+
+    for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
+        DestDetail dd = payload->getDestDetail(i);
+        L3Address finalDest = dd.getDest_ipAddress();
+        L3Address nexthopDest = dd.getNextHop_ipAddress();
+        if ((finalDest == myAddress) || (nexthopDest == myAddress)) {
+            to_ack = true;
+        }
+
+    }
+    //std::tuple<L3Address, uint32_t, uint32_t> packetId = std::make_tuple(t.getGen_ipAddress(), t.getId(), payload->getIdReqMessage());
+    std::pair<L3Address, uint32_t> packetId = std::make_pair(t.getGen_ipAddress(), t.getId());
+    //if (relayedPackets.find(packetId) == relayedPackets.end()) {
+    // We not yet relayed this packet
+    //relayedPackets.insert(packetId);
+
+
+
+    for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
+        DestDetail dd = payload->getDestDetail(i);
+        L3Address finalDest = dd.getDest_ipAddress();
+        L3Address nexthopDest = dd.getNextHop_ipAddress();
+        int act_ttl = dd.getTtl();
+
+        if (finalDest == myAddress) {
+            // TODO here you need to choose among hierarchical vs progressive
+
+
+            // check if task already deployed
+            if (extra_info_deploy_tasks.count(packetId) == 0) {
+
+                EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
+
+                //L3Address deployDest = checkDeployDestination(task);
+
+                // hierarchical
+
+                deployTaskHere(t);
+            }
+        }
+        else if (nexthopDest == myAddress) {
+            if (act_ttl > 1) {
+                deployDest_out.push_back(finalDest);
+                ttlDest_out.push_back(act_ttl - 1);
+            }
+        }
+    }
+
+    if (deployDest_out.size() > 0) {
+        if (relayedPackets.find(packetId) == relayedPackets.end()) {
+            relayedPackets.insert(packetId);
+
+
+            EV_INFO << "RECEIVED TASK. Not for me but need to relay. Sending out" << endl;
+
+            // sendTaskTo(deployDest_out, t, ttlDest_out);
+
+            if (forwardingTask_queue.empty()) {
+                scheduleClockEventAfter(uniform(0, maxForwardDelay), taskForwardMsg);
+            }
+
+            /*
+                for (int i = 0; i < deployDest_out.size(); ++i) {
+                    // Enqueue
+                    Forwarding_Task ft;
+                    ft.dests.push_back(deployDest_out[i]);
+                    ft.task = t;
+                    ft.ttls.push_back(ttlDest_out[i]);
+                    forwardingTask_queue.push(ft);
+                }
+             */
+
+            // Enqueue
+            Forwarding_Task ft;
+            ft.dests = deployDest_out;
+            ft.task = t;
+            ft.ttls = ttlDest_out;
+            ft.numberOfSending = 0;
+            forwardingTask_queue.push(ft);
+        }
+        else {
+            EV_INFO << "TASK from " << t.getGen_ipAddress() << ", ID: " << t.getId() << " already managed. Skipping this" << endl;
+        }
+
+
+
+    }
+
+    if ((to_ack) && (ack_func)) {
+
+        EV_INFO << "Sending ACK for this TASK" << endl;
+
+        std::ostringstream str;
+        str << "Ack-" << t.getGen_ipAddress().str() << "-" << t.getId();
+        Packet *packet = new Packet(str.str().c_str());
+        if (dontFragment)
+            packet->addTag<FragmentationReq>()->setDontFragment(true);
+
+        //const auto& payload = createPayloadForTask(dest, destAddr,  task, ttl);
+        //const auto& payload = createPayloadForTask(dest_next_ttl, task);
+
+        const auto& payload = makeShared<TaskREQ_ACKmessage>();
+
+        payload->setChunkLength(B(par("messageLength"))); // TODO
+
+        payload->setTask(t);
+        payload->setSrc_ipAddress(myAddress);
+        payload->setDest_ipAddress(srcAddr);
+
+
+        EV_INFO << "Sending ACK for this TASK. SRC: " << myAddress << "; DEST: " << srcAddr << endl;
+
+
+        packet->insertAtBack(payload);
+
+        socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+
+    }
+
+//    for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
+//        DestDetail dd = payload->getDestDetail(i);
+//        L3Address finalDest = dd.getDest_ipAddress();
+//        L3Address nexthopDest = dd.getNextHop_ipAddress();
+//        int act_ttl = dd.getTtl();
+//
+//        if (finalDest == myAddress) {
+//            // TODO here you need to choose among hierarchical vs progressive
+//
+//            EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
+//
+//            //L3Address deployDest = checkDeployDestination(task);
+//
+//            // hierarchical
+//            // TODO check if task already deployed
+//            deployTaskHere(t);
+//        }
+//        else if (nexthopDest == myAddress) {
+//            if (act_ttl > 1) {
+//                deployDest_out.push_back(finalDest);
+//                ttlDest_out.push_back(act_ttl - 1);
+//            }
+//        }
+//    }
+//
+//    if (deployDest_out.size() > 0) {
+//        //std::tuple<L3Address, uint32_t, uint32_t> packetId = std::make_tuple(t.getGen_ipAddress(), t.getId(), payload->getIdReqMessage());
+//        std::pair<L3Address, uint32_t> packetId = std::make_pair(t.getGen_ipAddress(), t.getId());
+//        if (relayedPackets.find(packetId) == relayedPackets.end()) {
+//            // We not yet relayed this packet
+//            relayedPackets.insert(packetId);
+//
+//            EV_INFO << "RECEIVED TASK. Not for me but need to relay. Sending out" << endl;
+//
+//            sendTaskTo(deployDest_out, t, ttlDest_out);
+//        }
+//    }
+
+//    L3Address finalDest = payload->getDest_ipAddress();
+//    L3Address nexthopDest = payload->getNextHop_ipAddress();
+//    TaskREQ t = payload->getTask();
+//    int act_ttl = payload->getTtl();
+//
+//    EV_INFO << "RECEIVED TASK with final dest: " << finalDest << ". My address is: " << myAddress << endl;
+//
+//    if (finalDest == myAddress) {
+//        // TODO here you need to choose among hierarchical vs progressive
+//
+//        //L3Address deployDest = checkDeployDestination(task);
+//
+//        // hierarchical
+//        deployTaskHere(t);
+//    }
+//    else if (nexthopDest == myAddress) {
+//
+//        if (act_ttl > 1) {
+//
+//            //Check if already relayed
+//            // Check if packetId is already in the set
+//            //std::pair<L3Address, uint32_t> packetId = std::make_pair(t.getGen_ipAddress(), t.getId());
+//            std::tuple<L3Address, uint32_t, uint32_t> packetId = std::make_tuple(t.getGen_ipAddress(), t.getId(), payload->getIdReqMessage());
+//            if (relayedPackets.find(packetId) == relayedPackets.end()) {
+//
+//                // We not yet relayed this packet
+//                relayedPackets.insert(packetId);
+//
+//                EV_INFO << "RECEIVED TASK. Not for me but need to relay. Sending out" << endl;
+//                //manageTask(payload->getTask());
+//                //L3Address deployDest = finalDest;
+//                sendTaskTo(finalDest, t, act_ttl - 1);
+//            }
+//        }
+//    }
+}
+
 void SimpleBroadcast1Hop::generateNewTask()
 {
+    TaskREQ newTask = parseTask();  //here the function that PARSE the SG script
 
+    EV_INFO << "Generating new TASK: " << newTask << endl;
+
+    std::pair<L3Address, uint32_t> packetId = std::make_pair(newTask.getGen_ipAddress(), newTask.getId());
+    relayedPackets.insert(packetId);
+
+    generatedTask_list.push_back(newTask);
+
+    manageNewTask(newTask, true);
 }
 
 void SimpleBroadcast1Hop::handleMessageWhenUp(cMessage *msg)
@@ -424,10 +1676,45 @@ void SimpleBroadcast1Hop::handleMessageWhenUp(cMessage *msg)
                 throw cRuntimeError("Invalid kind %d in self task message", (int)taskMsg->getKind());
             }
         }
+        else if (msg == taskForwardMsg){
+
+            switch (taskForwardMsg->getKind()) {
+            case FORWARD:
+                forwardTask();
+                //scheduleClockEventAfter(truncnormal(mean_tf, stddev_tf), taskForwardMsg);
+
+                if (!forwardingTask_queue.empty()) {
+                    // Generate a random delay uniformly in [0, maxDelay]
+                    double randomDelay = uniform(0, maxForwardDelay);
+                    // Schedule the self-message after this delay
+                    scheduleAfter(randomDelay, taskForwardMsg);
+                }
+                break;
+
+            default:
+                throw cRuntimeError("Invalid kind %d in self task forwarding message", (int)taskForwardMsg->getKind());
+            }
+
+
+        }
+        else if (msg == taskAckMsg){
+
+            switch (taskAckMsg->getKind()) {
+            case ACK_CHECK:
+                ackTask();
+
+                scheduleClockEventAfter(truncnormal(1, 0.01), taskAckMsg);
+                break;
+
+            default:
+                throw cRuntimeError("Invalid kind %d in self task forwarding message", (int)taskForwardMsg->getKind());
+            }
+
+
+        }
     }
     else
         socket.processMessage(msg);
-
 }
 
 void SimpleBroadcast1Hop::socketDataArrived(UdpSocket *socket, Packet *packet)
@@ -460,7 +1747,6 @@ void SimpleBroadcast1Hop::refreshDisplay() const
 
 void SimpleBroadcast1Hop::printPacket(Packet *msg)
 {
-
     L3Address src, dest;
     int protocol = -1;
     auto ctrl = msg->getControlInfo();
@@ -489,105 +1775,8 @@ void SimpleBroadcast1Hop::printPacket(Packet *msg)
     }
 }
 
-
-
-void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>payload, L3Address srcAddr, L3Address destAddr)
-{
-
-    // std::cout << "Received ChangesBlock! Changes:" << payload->getChangesCount() <<  std::endl;
-    L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
-
-    //Change *ch = new Change[payload->getChangesCount()];
-    Change ch;
-    for (int i=0; i<payload->getChangesCount(); i++){
-        ch = payload->getChangesList(i);
-//        std::cout << ch.getIpAddress() << " | " << ((int) ch.getParammeter()) << " | " << ch.getValue() << endl;
-
-        L3Address node_addr = ch.getIpAddress();
-        if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
-            int tmp_num_hops = 100000;
-            L3Address tmp_nextHop_address = L3Address();
-
-            NodeData nd;
-            if (nodeDataMap.count(node_addr) != 1) {
-                //new node
-                nd.timestamp = payload->getTimestamp();
-                nd.sequenceNumber = ch.getSequenceNumber();
-                nd.address = node_addr;
-                nd.coord_x = 0;
-                nd.coord_y = 0;
-                nd.memoryActUsage = 0;
-                nd.memoryMaxUsage = 0;
-                nd.compActUsage = 0;
-                nd.compMaxUsage = 0;
-                nd.hasCamera = false;
-                nd.lockedCamera = false;
-                nd.hasGPU = false;
-                nd.lockedGPU = false;
-                nd.lockedFly = false;
-//                nd.nextHop_address = payload->getIpAddress();
-//                nd.num_hops = nf.getNum_hops() + 1;
-                nodeDataMap[node_addr] = nd;
-                for (int j=0; j<16; j++) nd.lastSeqNumber[j] = 0;
-            } else {
-                nd = nodeDataMap[node_addr];
-            }
-
-            //add sequence number verification
-            if (nd.lastSeqNumber[ch.getParammeter()] < ch.getSequenceNumber()) {
-                switch (ch.getParammeter()){
-                case fldPOS_x:
-                    nd.coord_x = ch.getValue();
-                    break;
-                case fldPOS_y:
-                    nd.coord_y = ch.getValue();
-                    break;
-                case fldActCPU:
-                    nd.compActUsage = ch.getValue();
-                    break;
-                case fldActMEM:
-                    nd.memoryActUsage = ch.getValue();
-                    break;
-                case fldMaxCPU:
-                    nd.compMaxUsage = ch.getValue();
-                    break;
-                case fldMaxMEM:
-                    nd.memoryMaxUsage = ch.getValue();
-                    break;
-                case fldGPU:
-                    nd.hasGPU = (ch.getValue() == 1);
-                    break;
-                case fldCAM:
-                    nd.hasCamera = (ch.getValue() == 1);
-                    break;
-                case fldLkGPU:
-                    nd.lockedGPU = (ch.getValue() == 1);
-                    break;
-                case fldLkCAM:
-                    nd.lockedCamera = (ch.getValue() == 1);
-                    break;
-                case fldLkFLY:
-                    nd.lockedFly = (ch.getValue() == 1);
-                    break;
-                default:
-                    EV_ERROR << "new unidentified field " << std::endl;
-                    break;
-                }
-                nd.lastSeqNumber[ch.getParammeter()] = ch.getSequenceNumber();
-                nodeDataMap[node_addr] = nd;
-                addChange(ch);
-            }
-        }
-
-    }
-    //EV_INFO << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
-
-}
-
-
 void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3Address srcAddr, L3Address destAddr)
 {
-
     L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
 
     // Create or update the data associated with this IP address
@@ -691,32 +1880,22 @@ void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3
 
 }
 
-void SimpleBroadcast1Hop::addChange(Change ch){
-    bool cy = true;
-    for (int i=0; i<stChanges.size(); i++){
-        if (stChanges[i].getIpAddress() ==ch.getIpAddress() &&
-                stChanges[i].getParammeter() == ch.getParammeter()) {
-            cy = false;
-            if (ch.getSequenceNumber() > stChanges[i].getSequenceNumber() ) {
-                //update element
-                stChanges[i].setValue(ch.getValue());
-                stChanges[i].setSequenceNumber(ch.getSequenceNumber());
-            }
-        }
-    }
-    if (cy) {
-        //add element
-        stChanges.push_back(ch);
-    }
-}
-
-
-
 void SimpleBroadcast1Hop::processPacket(Packet *pk)
 {
     emit(packetReceivedSignal, pk);
     EV_INFO << "Received packet: " << UdpSocket::getReceivedPacketInfo(pk) << endl;
     printPacket(pk);
+
+
+    //auto bytesChunk = pk->peekAllAsBytes();
+    //EV_INFO << "Raw packet bytes: " << bytesChunk->str() << endl;
+
+    EV_INFO << "Packet name: " << pk->getName() << ", length: " << pk->getTotalLength() << "\n";
+    EV_INFO << "Tags:\n";
+    for (int i = 0; i < pk->getNumTags(); i++) {
+        auto tag = pk->getTag(i);
+        EV_INFO << "  Tag " << i << ": " << tag->str() << "\n";
+    }
 
     // Extract the sender's IP address
     L3Address srcAddr, destAddr;
@@ -730,23 +1909,52 @@ void SimpleBroadcast1Hop::processPacket(Packet *pk)
         destAddr = addresses->getDestAddress();
     }
 
+    std::string s = pk->getName();
+
+    EV_INFO << myAddress << " - Received packet: " << s << ", srcAddr: " << srcAddr << "\n";
+
     if ((srcAddr != loopbackAddress) && (srcAddr != myAddress)) {
+
+//        auto taskPayload = pk->peekAtBack<TaskREQmessage>(b(-1), 0);
+//        if (taskPayload != nullptr) {
+//            // It's indeed a TaskREQmessage chunk
+//            processTaskREQmessage(taskPayload, srcAddr, destAddr);
+//        }
+//        else {
+//            auto heartbeatPayload = pk->peekAtBack<Heartbeat>(b(-1), 0);
+//            if (heartbeatPayload != nullptr) {
+//                // It's a Heartbeat
+//                processHeartbeat(heartbeatPayload, srcAddr, destAddr);
+//            }
+//            else {
+//                EV_WARN << "No recognized chunk at the back.\n";
+//            }
+//        }
+
         // Process here
-        // Check if the packet contains ChangesBlock or Heartbeat data
-        if (pk->hasData<ChangesBlock>()) {
-            const auto& payload = pk->peekData<ChangesBlock>();
-//            std::cout << "---------" << myAddress << " Receive-----------------" <<  std::endl;
-            processChangesBlock(payload, srcAddr, destAddr);
-
-
-
-        } else
-        if (pk->hasData<Heartbeat>()) {
+        // Check if the packet contains Heartbeat data
+        //if ((s.rfind("Heartbeat", 0)) && (pk->hasData<Heartbeat>())) {
+        if (s.rfind("Heartbeat", 0) == 0) {
             // Extract the Heartbeat payload
             const auto& payload = pk->peekData<Heartbeat>();
 
             processHeartbeat(payload, srcAddr, destAddr);
-        } else {
+
+        // Check if the packet contains TaskREQmessage data
+        //} else if ((s.rfind("Task", 0)) && (pk->hasData<TaskREQmessage>())) {
+        } else if (s.rfind("Task", 0) == 0) {
+            // Extract the TaskREQmessage payload
+            const auto& payload = pk->peekData<TaskREQmessage>();
+
+            processTaskREQmessage(payload, srcAddr, destAddr);
+        }
+        else if (s.rfind("Ack", 0) == 0) {
+            // Extract the TaskREQ_ACKmessage payload
+            const auto& payload = pk->peekData<TaskREQ_ACKmessage>();
+
+            processTaskREQ_ACKmessage(payload, srcAddr, destAddr);
+        }
+        else {
             EV_WARN << "Received packet does not contain a Heartbeat payload." << endl;
         }
     }
@@ -774,7 +1982,7 @@ void SimpleBroadcast1Hop::handleStopOperation(LifecycleOperation *operation)
 void SimpleBroadcast1Hop::handleCrashOperation(LifecycleOperation *operation)
 {
     cancelClockEvent(selfMsg);
-    socket.destroy(); // TODO  in real operating systems, program crash detected by OS and OS closes sockets of crashed programs.
+    socket.destroy(); // in real operating systems, program crash detected by OS and OS closes sockets of crashed programs.
 }
 
 } // namespace inet

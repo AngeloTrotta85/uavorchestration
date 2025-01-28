@@ -1191,8 +1191,12 @@ void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task
     for (auto& d : dest){
         if (nodeDataMap.count(d) != 0) {
             NodeData data = nodeDataMap[d];
-            dest_next_ttl.push_back(std::make_tuple(d, data.nextHop_address, ttl[i]));
+            auto tupleValue = std::make_tuple(d, data.nextHop_address, ttl[i]);
+            dest_next_ttl.push_back(tupleValue);
+
+            //dest_next_ttl.push_back(std::make_tuple(d, data.nextHop_address, ttl[i]));
         }
+
         i++;
     }
 

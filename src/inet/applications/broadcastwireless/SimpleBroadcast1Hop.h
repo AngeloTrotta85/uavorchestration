@@ -25,6 +25,7 @@
 #include <algorithm> // for std::find
 
 #include <numeric>  // for std::accumulate
+#include <cmath>     // for std::sqrt, std::acos
 
 #include "inet/mobility/base/MovingMobilityBase.h"
 #include "inet/applications/base/ApplicationBase.h"
@@ -237,15 +238,19 @@ public:
     virtual Ptr<TaskREQmessage> createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task);
 
     virtual TaskREQ parseTask();
+    virtual bool isDeployFeasibleLocal(TaskREQ& task);
     virtual bool isDeployFeasible(TaskREQ& task, NodeData node);
+    virtual std::vector<L3Address> checkDeployDestinationAmong_Progressive(TaskREQ& task, std::map<L3Address, NodeData>& nodes);
     virtual std::vector<L3Address> checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes);
-    virtual std::vector<L3Address> checkDeployDestination(TaskREQ& task);
+    virtual std::vector<L3Address> checkDeployDestination(TaskREQ& task, L3Address avoidAddress = L3Address("0.0.0.0"));
     virtual void sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task, std::vector<int>& ttl);
     virtual void deployTaskHere(TaskREQ& task);
-    virtual void manageNewTask(TaskREQ& task, bool generatedHereNow);
+    virtual void manageNewTask(TaskREQ& task, bool generatedHereNow = false, L3Address avoidAddress = L3Address("0.0.0.0"));
     virtual void generateNewTask();
     virtual void processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr);
     virtual void processTaskREQ_ACKmessage(const Ptr<const TaskREQ_ACKmessage>payload, L3Address srcAddr, L3Address destAddr);
+
+    virtual double calculateProgressiveScore(TaskREQ& task, NodeData node);
 
     virtual void forwardTask();
     virtual void ackTask();
@@ -261,6 +266,8 @@ public:
   public:
     SimpleBroadcast1Hop() {}
     ~SimpleBroadcast1Hop();
+
+    static bool isWithinArc(double xa, double ya, double xb, double yb, double xd, double yd, double alphaDegrees);
 };
 
 // Correctly overload operator<< as a non-member function

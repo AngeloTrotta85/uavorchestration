@@ -695,36 +695,38 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
     payload->setLockedFly(lockedFly);
     payload->setLockedGPU(lockedGPU);
 
-    int i = 0;
-    payload->setNodeInfoListArraySize(nodeDataMap.size());
-    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
-        L3Address ipAddr = it->first;
-        NodeData data = it->second;
+    if (dissType == HIERARCHICAL) {
+        int i = 0;
+        payload->setNodeInfoListArraySize(nodeDataMap.size());
+        for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+            L3Address ipAddr = it->first;
+            NodeData data = it->second;
 
-        NodeInfo new_NodeInfo;
-        new_NodeInfo.setTimestamp(data.timestamp);
-        new_NodeInfo.setSequenceNumber(data.sequenceNumber);
-        new_NodeInfo.setIpAddress(data.address);
-        new_NodeInfo.setCoord_x(data.coord_x);
-        new_NodeInfo.setCoord_y(data.coord_y);
-        new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
-        new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
-        new_NodeInfo.setCompActUsage(data.compActUsage);
-        new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
+            NodeInfo new_NodeInfo;
+            new_NodeInfo.setTimestamp(data.timestamp);
+            new_NodeInfo.setSequenceNumber(data.sequenceNumber);
+            new_NodeInfo.setIpAddress(data.address);
+            new_NodeInfo.setCoord_x(data.coord_x);
+            new_NodeInfo.setCoord_y(data.coord_y);
+            new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
+            new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
+            new_NodeInfo.setCompActUsage(data.compActUsage);
+            new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
 
-        new_NodeInfo.setNextHop_address(data.nextHop_address);
-        new_NodeInfo.setNum_hops(data.num_hops);
+            new_NodeInfo.setNextHop_address(data.nextHop_address);
+            new_NodeInfo.setNum_hops(data.num_hops);
 
-        new_NodeInfo.setHasGPU(data.hasGPU);
-        new_NodeInfo.setHasCamera(data.hasCamera);
+            new_NodeInfo.setHasGPU(data.hasGPU);
+            new_NodeInfo.setHasCamera(data.hasCamera);
 
-        new_NodeInfo.setLockedCamera(data.lockedCamera);
-        new_NodeInfo.setLockedGPU(data.lockedGPU);
-        new_NodeInfo.setLockedFly(data.lockedFly);
+            new_NodeInfo.setLockedCamera(data.lockedCamera);
+            new_NodeInfo.setLockedGPU(data.lockedGPU);
+            new_NodeInfo.setLockedFly(data.lockedFly);
 
-        payload->setNodeInfoList(i, new_NodeInfo);
+            payload->setNodeInfoList(i, new_NodeInfo);
 
-        i++;
+            i++;
+        }
     }
 
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
@@ -1004,12 +1006,161 @@ bool SimpleBroadcast1Hop::isDeployFeasible(TaskREQ& task, NodeData node) {
     return ris;
 }
 
+static double directionFactor(double xa, double ya,
+                 double xb, double yb,
+                 double xd, double yd,
+                 double alphaDegrees)
+{
+    // 1) Build vectors AD and AB
+    double ADx = xd - xa;
+    double ADy = yd - ya;
+    double ABx = xb - xa;
+    double ABy = yb - ya;
+
+    // 2) Compute dot product
+    double dot = (ADx * ABx) + (ADy * ABy);
+
+    // 3) Compute magnitudes (watch out for zero length)
+    double magAD = std::sqrt(ADx*ADx + ADy*ADy);
+    double magAB = std::sqrt(ABx*ABx + ABy*ABy);
+
+    // If either vector is zero-length, angle is undefined; handle as needed
+    if (magAD < 1e-9 || magAB < 1e-9) {
+        return false;
+    }
+
+    // 4) Compute angle in radians
+    double cosTheta = dot / (magAD * magAB);
+
+    // Numerical safety: clamp cosTheta to [-1, 1] to avoid domain errors in acos
+    if (cosTheta > 1.0)  cosTheta = 1.0;
+    else if (cosTheta < -1.0) cosTheta = -1.0;
+
+    double thetaRad = std::acos(cosTheta);
+    // Convert to degrees
+    double thetaDeg = thetaRad * 180.0 / M_PI;
+
+    // 5) Compare to alpha
+    //return (thetaDeg <= alphaDegrees);
+
+    // Now compute piecewise-linear factor:
+    // f(theta) = 1 - (theta / alpha), clipped to [0, 1].
+    if (thetaDeg <= 0.0) {
+        return 1.0; // the vectors are basically identical direction
+    } else if (thetaDeg >= alphaDegrees) {
+        return 0.0; // angle is outside arc
+    } else {
+        return 1.0 - (thetaDeg / alphaDegrees);
+    }
+}
+//
+//int main()
+//{
+//    double xa = 0, ya = 0;
+//    double xb = 1, yb = 1;
+//    double xd = 2, yd = 0;
+//    double alpha = 45.0;  // degrees
+//
+//    bool result = isWithinArc(xa, ya, xb, yb, xd, yd, alpha);
+//    std::cout << "B is "
+//              << (result ? "" : "not ")
+//              << "within " << alpha << " degrees of A->D\n";
+//    return 0;
+//}
+
+
+double SimpleBroadcast1Hop::calculateProgressiveScore(TaskREQ& task, NodeData node) {
+    double ris = 0;
+    double pos_fact = 1;
+    double gpu_fact = 1;
+    double mem_fact = 1;
+    double cpu_fact = 1;
+    double fly_fact = 1;
+    double cam_fact = 1;
+
+    //check coords
+    if (task.getReqPosition()){
+        pos_fact = directionFactor(mob->getCurrentPosition().x, mob->getCurrentPosition().y, node.coord_x, node.coord_y, task.getPos_coord_x(), task.getPos_coord_y(), 90);
+    }
+
+    //check GPU
+    if (task.getReqCPU()) {
+        if (node.lockedGPU || !node.hasGPU) {
+            gpu_fact = 0;
+        }
+    }
+
+    //check locked Fly
+    if (task.getReq_lock_flyengine() && node.lockedFly)
+        fly_fact = 0;
+
+    //check camera
+    if ((task.getReqCamera() && node.lockedCamera) || (task.getReqCamera() && !node.hasCamera))
+        cam_fact = 0;
+
+    //check CPU
+
+    if ((task.getReqCPU() + node.compActUsage) > node.compMaxUsage)
+        cpu_fact = node.compMaxUsage / (task.getReqCPU() + node.compActUsage);
+
+
+    //check Memory
+    if ((task.getReqMemory() + node.memoryActUsage) > node.memoryMaxUsage)
+        mem_fact = node.memoryMaxUsage / (task.getReqMemory() + node.memoryActUsage);
+
+    return (0.5 * pos_fact) + (0.5 * ((gpu_fact + fly_fact + cam_fact + cpu_fact + mem_fact) / 5.0));
+}
+
+std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progressive(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
+{
+    std::vector<L3Address> ris;
+    std::map<L3Address, double> nodeDataMap_score;
+
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
+        double score = calculateProgressiveScore(task, it->second);
+        //if (score > 0.5)
+            nodeDataMap_score[it->first] = score;
+    }
+
+    EV_INFO << "checkDeployDestinationAmong_Progressive - Calculated SCORES: " << endl;
+    for (std::map<inet::L3Address, double>::iterator it = nodeDataMap_score.begin(); it != nodeDataMap_score.end(); ++it) {
+        EV_INFO << it->first << " with score " << it->second << endl;
+    }
+
+    size_t mapSize = nodeDataMap_score.size();
+
+    if (mapSize != 0){
+        if ((task.getStrategy() == STRATEGY_FORALL) || (task.getStrategy() == STRATEGY_MANY)) {
+            for (std::map<inet::L3Address, double>::iterator it = nodeDataMap_score.begin(); it != nodeDataMap_score.end(); ++it) {
+                ris.push_back(it->first);
+            }
+        }
+        else {
+            L3Address best = L3Address("0.0.0.0");
+            double score_max = 0;
+            for (std::map<inet::L3Address, double>::iterator it = nodeDataMap_score.begin(); it != nodeDataMap_score.end(); ++it) {
+                if (it->second > score_max) {
+                    best = it->first;
+                    score_max = it->second;
+                }
+            }
+            ris.push_back(best);
+
+        }
+
+    }
+
+    return ris;
+
+}
+
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
 {
     std::vector<L3Address> ris;
 
     std::map<L3Address, NodeData> nodeDataMap_feasible;
-    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+    //for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
         if (isDeployFeasible(task, it->second))
             nodeDataMap_feasible[it->first] = it->second;
     }
@@ -1088,7 +1239,7 @@ SimpleBroadcast1Hop::NodeData SimpleBroadcast1Hop::getMyNodeData(){
     return mydata;
 }
 
-std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task)
+std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task, L3Address avoidAddress)
 {
     std::map<L3Address, NodeData> nodeDataMap_all;
     NodeData mydata = getMyNodeData();
@@ -1127,7 +1278,8 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task
 
     nodeDataMap_all[myAddress] = mydata;
     for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
-        nodeDataMap_all[it->first] = it->second;
+        if (it->first != avoidAddress)
+            nodeDataMap_all[it->first] = it->second;
     }
 
     EV_INFO << "SimpleBroadcast1Hop::checkDeployDestination. ALL DEVICES" << endl;
@@ -1135,8 +1287,10 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task
         EV_INFO << el.first << " | " << el.second << endl;
     }
 
-    return checkDeployDestinationAmong(task, nodeDataMap_all);
-
+    if (dissType == HIERARCHICAL)
+        return checkDeployDestinationAmong(task, nodeDataMap_all);
+    else
+        return checkDeployDestinationAmong_Progressive(task, nodeDataMap_all);
 
 //    size_t mapSize = nodeDataMap.size();
 //    double r = uniform(0, 1);
@@ -1163,6 +1317,16 @@ Ptr<TaskREQmessage> SimpleBroadcast1Hop::createPayloadForTask(std::vector<std::t
     payload->setChunkLength(B(par("messageLength"))); // TODO
 
     payload->setIdReqMessage(reqSent);
+    if (dissType == HIERARCHICAL) {
+        payload->setDepStrategy(HIERARCHICAL_MSG);
+    }
+    else if (dissType == PROGRESSIVE) {
+        payload->setDepStrategy(PROGRESSIVE_MSG);
+    }
+    else {
+        payload->setDepStrategy(HIERARCHICAL_MSG); //TODO
+    }
+
 
     payload->setDestDetailArraySize(finaldest_next_ttl.size());
     for (int i = 0; i < finaldest_next_ttl.size(); ++i) {
@@ -1191,7 +1355,7 @@ void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task
     for (auto& d : dest){
         if (nodeDataMap.count(d) != 0) {
             NodeData data = nodeDataMap[d];
-            auto tupleValue = std::make_tuple(d, data.nextHop_address, ttl[i]);
+            auto tupleValue = std::make_tuple(d, data.nextHop_address, ttl[i]); // @suppress("Function cannot be instantiated")
             dest_next_ttl.push_back(tupleValue);
 
             //dest_next_ttl.push_back(std::make_tuple(d, data.nextHop_address, ttl[i]));
@@ -1259,6 +1423,11 @@ void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task
 //    }
 }
 
+bool SimpleBroadcast1Hop::isDeployFeasibleLocal(TaskREQ& task) {
+    NodeData nd = getMyNodeData();
+    return isDeployFeasible(task, nd);
+}
+
 void SimpleBroadcast1Hop::deployTaskHere(TaskREQ& task)
 {
     //Check if already deployed
@@ -1267,6 +1436,13 @@ void SimpleBroadcast1Hop::deployTaskHere(TaskREQ& task)
             return;
         }
     }
+
+    // Check if I have the capabilities
+    if (!isDeployFeasibleLocal(task)) {
+        EV_INFO << myAddress << " NOT deploying TASK here, I don't meet the constraints" << endl;
+        return;
+    }
+
     EV_INFO << "Deploying TASK NOW: " << task << endl;
     assignedTask_list.push_back(task);
 
@@ -1286,7 +1462,7 @@ void SimpleBroadcast1Hop::deployTaskHere(TaskREQ& task)
 
 }
 
-void SimpleBroadcast1Hop::manageNewTask(TaskREQ& task, bool generatedHereNow = false)
+void SimpleBroadcast1Hop::manageNewTask(TaskREQ& task, bool generatedHereNow, L3Address avoidAddress)
 {
     L3Address loopbackAddress("127.0.0.1");
     std::vector<L3Address> deployDest = checkDeployDestination(task);
@@ -1465,17 +1641,27 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
         if (finalDest == myAddress) {
             // TODO here you need to choose among hierarchical vs progressive
 
+            if (dissType == HIERARCHICAL) {
 
-            // check if task already deployed
-            if (extra_info_deploy_tasks.count(packetId) == 0) {
 
-                EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
+                // check if task already deployed
+                if (extra_info_deploy_tasks.count(packetId) == 0) {
 
-                //L3Address deployDest = checkDeployDestination(task);
+                    EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
 
-                // hierarchical
+                    //L3Address deployDest = checkDeployDestination(task);
 
-                deployTaskHere(t);
+                    // hierarchical
+
+                    deployTaskHere(t);
+                }
+            }
+            else { //dissType == PROGRESSIVE
+                std::pair<L3Address, uint32_t> packetId = std::make_pair(t.getGen_ipAddress(), t.getId());
+                if (relayedPackets.find(packetId) == relayedPackets.end()) {
+                    relayedPackets.insert(packetId);
+                    manageNewTask(t, false, srcAddr);
+                }
             }
         }
         else if (nexthopDest == myAddress) {

@@ -1118,7 +1118,7 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
 
     for (std::map<inet::L3Address, NodeData>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
         double score = calculateProgressiveScore(task, it->second);
-        //if (score > 0.5)
+        if (score > 0.5)
             nodeDataMap_score[it->first] = score;
     }
 

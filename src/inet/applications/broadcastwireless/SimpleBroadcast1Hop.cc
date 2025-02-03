@@ -1075,6 +1075,7 @@ bool SimpleBroadcast1Hop::isDeployFeasible(TaskREQ& task, NodeData node) {
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
 {
     std::vector<L3Address> ris;
+    if (dissType == HIERARCHICAL) return ris;
 
     std::map<L3Address, NodeData> nodeDataMap_feasible;
     for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
@@ -1158,6 +1159,7 @@ SimpleBroadcast1Hop::NodeData SimpleBroadcast1Hop::getMyNodeData(){
 
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task)
 {
+
     std::map<L3Address, NodeData> nodeDataMap_all;
     NodeData mydata = getMyNodeData();
 
@@ -1290,7 +1292,12 @@ void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task
             EV_INFO << "  Tag " << i << ": " << tag->str() << "\n";
         }
 
-        socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+        if (dissType == HIERARCHICAL) {
+            //broadcast
+            socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+        } else {
+            socket.sendTo(packet, dest[0], destPort);
+        }
 
         //reqSent++;
     }
@@ -1357,30 +1364,42 @@ void SimpleBroadcast1Hop::deployTaskHere(TaskREQ& task)
 void SimpleBroadcast1Hop::manageNewTask(TaskREQ& task, bool generatedHereNow = false)
 {
     L3Address loopbackAddress("127.0.0.1");
-    std::vector<L3Address> deployDest = checkDeployDestination(task);
     std::vector<L3Address> deployDest_out;
     std::vector<int> ttls;
+    std::vector<L3Address> deployDest = checkDeployDestination(task);
 
-    if (generatedHereNow) {
-        Task_generated_extra_info extra;
-        extra.generation_time = simTime();
+    if (dissType == HIERARCHICAL) {
+        if (generatedHereNow) {
+            Task_generated_extra_info extra;
+            extra.generation_time = simTime();
 
-        int nnodes = this->getParentModule()->getVectorSize();
-        for (int n = 0; n < nnodes; ++n) {
-            SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
-            L3Address n_ipaddr = appn->myAddress;
-            NodeData n_data = appn->getMyNodeData();
+            int nnodes = this->getParentModule()->getVectorSize();
+            for (int n = 0; n < nnodes; ++n) {
+                SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
+                L3Address n_ipaddr = appn->myAddress;
+                NodeData n_data = appn->getMyNodeData();
 
-            if (isDeployFeasible(task, n_data) ) {
-                extra.deployable_nodes_at_generation.push_back(n_ipaddr);
+                if (isDeployFeasible(task, n_data) ) {
+                    extra.deployable_nodes_at_generation.push_back(n_ipaddr);
+                }
             }
+
+            extra.decision_nodes_at_generation.insert(extra.decision_nodes_at_generation.end(), deployDest.begin(), deployDest.end());
+
+            extra_info_generated_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
         }
-
-        extra.decision_nodes_at_generation.insert(extra.decision_nodes_at_generation.end(), deployDest.begin(), deployDest.end());
-
-        extra_info_generated_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
+    } else {
+        L3Address finalDest = getBestNeighbor(task);
+        if (finalDest == myAddress) {
+            NodeData node = getMyNodeData();
+            if (isDeployFeasible(task, node)){
+                deployTaskHere(task);
+            }
+        } else {
+            deployDest_out.push_back(finalDest);
+            ttls.push_back(10);
+        }
     }
-
     //if (deployDest == Ipv4Address::UNSPECIFIED_ADDRESS) {
     if (deployDest.size() == 0) {
         EV_INFO << "NO place where to deploy TASK!" << endl;
@@ -1500,18 +1519,35 @@ void SimpleBroadcast1Hop::processTaskREQ_ACKmessage(const Ptr<const TaskREQ_ACKm
 L3Address SimpleBroadcast1Hop::getBestNeighbor(TaskREQ& t)
 {
     //return best neighbor IP address to the given task
-    L3Address out = myAddress;
+    double rk;
+    NodeData data = getMyNodeData();
+    double outRk = getRanking(t, data);
+    L3Address out = data.address;
     for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
         L3Address ipAddr = it->first;
-        NodeData data = it->second;
+        data = it->second;
         if (isDeployFeasible(t, data)){
-            out = ipAddr;
-            break;
+            rk = getRanking(t, data);
+            if (rk >= outRk){
+                out = ipAddr;
+                outRk = rk;
+            }
         }
     }
     return out;
 
 }
+
+double SimpleBroadcast1Hop::getRanking(TaskREQ& t, NodeData& node){
+
+    //TODO
+
+
+
+    return 1;
+
+}
+
 
 void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr)
 {
@@ -1584,6 +1620,7 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
         ttlDest_out.clear();
         NodeData node = getMyNodeData();
         if (isDeployFeasible(t, node)){
+            to_ack = true;
             deployTaskHere(t);
         } else {
             //choose one of my neighbors to forward the task

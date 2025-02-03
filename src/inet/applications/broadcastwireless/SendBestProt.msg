@@ -65,7 +65,7 @@ import inet.networklayer.common.L3Address;
 
 namespace inet;
 
-class SendBest
+class SendBstProt
 {
     simtime_t timestamp;
     uint32_t sequenceNumber;
@@ -74,10 +74,15 @@ class SendBest
     double coord_y;
     double radius;
     
-
-
-    
-    
+    double memoryActUsage;
+    double memoryMaxUsage;    
+    double compActUsage;
+    double compMaxUsage;
+    bool hasCamera;
+    bool lockedCamera;
+    bool hasGPU;
+    bool lockedGPU;
+    bool lockedFly;
 }
 
 

@@ -658,6 +658,19 @@ L3Address SimpleBroadcast1Hop::chooseDestAddr()
     return destAddresses[k];
 }
 
+void SimpleBroadcast1Hop::updateRadius(){
+    double x1 = mob->getCurrentPosition().x;
+    double y1 = mob->getCurrentPosition().y;
+    radius = 0;
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+        L3Address ipAddr = it->first;
+        NodeData data = it->second;
+        //calculate new radius - if granter than previous, overwrite it
+        double r = sqrt((x1-data.coord_x)*(x1-data.coord_x) + (y1-data.coord_y)*(y1-data.coord_y));
+        if (r > radius) radius = r;
+    }
+}
+
 Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 {
     const auto& payload = makeShared<Heartbeat>();
@@ -669,8 +682,8 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
     payload->setCoord_x(mob->getCurrentPosition().x);
     payload->setCoord_y(mob->getCurrentPosition().y);
 
-    payload->setCompMaxUsage(computationalPower);
-    payload->setMemoryMaxUsage(availableMaxMemory);
+
+    //update self use by assigned tasks
     double compActUsage = 0;
     double memActUsage = 0;
     bool lockedGPU = false;
@@ -685,6 +698,10 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
             if (assignedTask_list[i].getReq_lock_flyengine()) lockedFly = true;
         }
     }
+
+    payload->setCompMaxUsage(computationalPower);
+    payload->setMemoryMaxUsage(availableMaxMemory);
+
     payload->setCompActUsage(compActUsage);
     payload->setMemoryActUsage(memActUsage);
 
@@ -695,38 +712,89 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
     payload->setLockedFly(lockedFly);
     payload->setLockedGPU(lockedGPU);
 
-    int i = 0;
-    payload->setNodeInfoListArraySize(nodeDataMap.size());
-    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
-        L3Address ipAddr = it->first;
-        NodeData data = it->second;
 
-        NodeInfo new_NodeInfo;
-        new_NodeInfo.setTimestamp(data.timestamp);
-        new_NodeInfo.setSequenceNumber(data.sequenceNumber);
-        new_NodeInfo.setIpAddress(data.address);
-        new_NodeInfo.setCoord_x(data.coord_x);
-        new_NodeInfo.setCoord_y(data.coord_y);
-        new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
-        new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
-        new_NodeInfo.setCompActUsage(data.compActUsage);
-        new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
+    if (dissType == PROGRESSIVE) {
+        //in partial knowledge, I will send only 1-hop nodes
+        //choose the best metrics between me and my 1-hop neighbors and broadcast it
+        updateRadius();
+        payload->setRadius(radius);
 
-        new_NodeInfo.setNextHop_address(data.nextHop_address);
-        new_NodeInfo.setNum_hops(data.num_hops);
+        for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+            L3Address ipAddr = it->first;
+            NodeData data = it->second;
 
-        new_NodeInfo.setHasGPU(data.hasGPU);
-        new_NodeInfo.setHasCamera(data.hasCamera);
+            // I need to overwrite the metrics based on best choices
 
-        new_NodeInfo.setLockedCamera(data.lockedCamera);
-        new_NodeInfo.setLockedGPU(data.lockedGPU);
-        new_NodeInfo.setLockedFly(data.lockedFly);
+            //rule for CompMaxUsage
+            if (data.compMaxUsage > payload->getCompMaxUsage())
+                payload->setCompMaxUsage(data.memoryMaxUsage);
 
-        payload->setNodeInfoList(i, new_NodeInfo);
+            //rule for MemoryMaxUsage
+            if (data.memoryMaxUsage > payload->getMemoryMaxUsage())
+                payload->setMemoryMaxUsage(data.memoryMaxUsage);
 
-        i++;
+            //rule for CompActUsage - choose the minor
+            if (data.compActUsage < payload->getCompActUsage())
+                payload->setCompActUsage(data.compActUsage);
+
+            //rule for MemoryActUsage - choose the minor
+            if (data.memoryActUsage < payload->getMemoryActUsage())
+                payload->setMemoryActUsage(data.memoryActUsage);
+
+            //rule for HasCamera and LockedCamera
+            payload->setHasCamera(payload->getHasCamera() || data.hasCamera);
+            payload->setLockedCamera(!payload->getHasCamera()&&data.lockedCamera ||
+                                    payload->getLockedCamera()&&!data.hasCamera ||
+                                    payload->getLockedCamera()&&data.lockedCamera);
+
+
+            //rule for HasGPU and LockedGPU
+            payload->setHasGPU(payload->getHasGPU() || data.hasGPU);
+            payload->setLockedGPU(!payload->getHasGPU()&&data.lockedGPU ||
+                                    payload->getLockedGPU()&&!data.hasGPU ||
+                                    payload->getLockedGPU()&&data.lockedGPU);
+
+            //rule for LockedFly
+            if (lockedFly && !data.lockedFly)
+                payload->setLockedFly(false);
+        }
+
+
+    } else {
+        //sending full node table data
+        int i = 0;
+
+        payload->setNodeInfoListArraySize(nodeDataMap.size());
+        for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+            L3Address ipAddr = it->first;
+            NodeData data = it->second;
+
+            NodeInfo new_NodeInfo;
+            new_NodeInfo.setTimestamp(data.timestamp);
+            new_NodeInfo.setSequenceNumber(data.sequenceNumber);
+            new_NodeInfo.setIpAddress(data.address);
+            new_NodeInfo.setCoord_x(data.coord_x);
+            new_NodeInfo.setCoord_y(data.coord_y);
+            new_NodeInfo.setMemoryActUsage(data.memoryActUsage);
+            new_NodeInfo.setMemoryMaxUsage(data.memoryMaxUsage);
+            new_NodeInfo.setCompActUsage(data.compActUsage);
+            new_NodeInfo.setCompMaxUsage(data.compMaxUsage);
+
+            new_NodeInfo.setNextHop_address(data.nextHop_address);
+            new_NodeInfo.setNum_hops(data.num_hops);
+
+            new_NodeInfo.setHasGPU(data.hasGPU);
+            new_NodeInfo.setHasCamera(data.hasCamera);
+
+            new_NodeInfo.setLockedCamera(data.lockedCamera);
+            new_NodeInfo.setLockedGPU(data.lockedGPU);
+            new_NodeInfo.setLockedFly(data.lockedFly);
+
+            payload->setNodeInfoList(i, new_NodeInfo);
+
+            i++;
+        }
     }
-
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
     return payload;
@@ -1439,53 +1507,67 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
     EV_INFO << myAddress << " - RECEIVED TASK. " << t.getGen_ipAddress() << "-" << t.getId() << "-" << payload->getIdReqMessage() << endl;
 
 
-    for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
-        DestDetail dd = payload->getDestDetail(i);
-        L3Address finalDest = dd.getDest_ipAddress();
-        L3Address nexthopDest = dd.getNextHop_ipAddress();
-        if ((finalDest == myAddress) || (nexthopDest == myAddress)) {
-            to_ack = true;
-        }
-
-    }
     //std::tuple<L3Address, uint32_t, uint32_t> packetId = std::make_tuple(t.getGen_ipAddress(), t.getId(), payload->getIdReqMessage());
     std::pair<L3Address, uint32_t> packetId = std::make_pair(t.getGen_ipAddress(), t.getId());
     //if (relayedPackets.find(packetId) == relayedPackets.end()) {
     // We not yet relayed this packet
     //relayedPackets.insert(packetId);
 
+    //Hierarchical: - if I'm destination, deploy, else, forward
+    //Progressive: - if I fit requirements, deploy, else, forward
+    if (dissType == HIERARCHICAL) {
+        //this is for hierarchical strategy
+        for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
+            DestDetail dd = payload->getDestDetail(i);
+            L3Address finalDest = dd.getDest_ipAddress();
+            L3Address nexthopDest = dd.getNextHop_ipAddress();
+            if ((finalDest == myAddress) || (nexthopDest == myAddress)) {
+                to_ack = true;
+            }
+
+        }
+
+        for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
+            DestDetail dd = payload->getDestDetail(i);
+            L3Address finalDest = dd.getDest_ipAddress();
+            L3Address nexthopDest = dd.getNextHop_ipAddress();
+            int act_ttl = dd.getTtl();
+
+            if (finalDest == myAddress) {
+                // TODO here you need to choose among hierarchical vs progressive
 
 
-    for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
-        DestDetail dd = payload->getDestDetail(i);
-        L3Address finalDest = dd.getDest_ipAddress();
-        L3Address nexthopDest = dd.getNextHop_ipAddress();
-        int act_ttl = dd.getTtl();
+                // check if task already deployed
+                if (extra_info_deploy_tasks.count(packetId) == 0) {
 
-        if (finalDest == myAddress) {
-            // TODO here you need to choose among hierarchical vs progressive
+                    EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
 
+                    //L3Address deployDest = checkDeployDestination(task);
 
-            // check if task already deployed
-            if (extra_info_deploy_tasks.count(packetId) == 0) {
+                    // hierarchical
 
-                EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
-
-                //L3Address deployDest = checkDeployDestination(task);
-
-                // hierarchical
-
-                deployTaskHere(t);
+                    deployTaskHere(t);
+                }
+            }
+            else if (nexthopDest == myAddress) {
+                if (act_ttl > 1) {
+                    deployDest_out.push_back(finalDest);
+                    ttlDest_out.push_back(act_ttl - 1);
+                }
             }
         }
-        else if (nexthopDest == myAddress) {
-            if (act_ttl > 1) {
-                deployDest_out.push_back(finalDest);
-                ttlDest_out.push_back(act_ttl - 1);
-            }
-        }
+    } else if (dissType == PROGRESSIVE_FULL){
+        //TODO Progressive strategy with full network knowledge
+        //check if THIS node is the best one to deploy, else, forward it to the next hop
+
+
+    } else if (dissType == PROGRESSIVE){
+        //TODO Progressive strategy with partial network knowledge
+        //checks if this node meets the requirements, otherwise forwards to the best option (direction)
     }
 
+
+    //FORWARDING
     if (deployDest_out.size() > 0) {
         if (relayedPackets.find(packetId) == relayedPackets.end()) {
             relayedPackets.insert(packetId);
@@ -1521,8 +1603,6 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
         else {
             EV_INFO << "TASK from " << t.getGen_ipAddress() << ", ID: " << t.getId() << " already managed. Skipping this" << endl;
         }
-
-
 
     }
 
@@ -1807,73 +1887,80 @@ void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3
     data.nextHop_address = payload->getIpAddress();
     data.num_hops = 1;
 
+    data.radius = payload->getRadius();
+
     // Store or update the data in the map
     nodeDataMap[srcAddr] = data;
 
-    size_t nodeArraySize = payload->getNodeInfoListArraySize();
-    for (int i = 0; i < nodeArraySize; ++i) {
-        NodeInfo nf = payload->getNodeInfoList(i);
-        L3Address node_addr = nf.getIpAddress();
+    updateRadius();
 
-        if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
+    if (dissType != PROGRESSIVE) {
+        size_t nodeArraySize = payload->getNodeInfoListArraySize();
+        for (int i = 0; i < nodeArraySize; ++i) {
+            NodeInfo nf = payload->getNodeInfoList(i);
+            L3Address node_addr = nf.getIpAddress();
 
-            int tmp_num_hops = 100000;
-            L3Address tmp_nextHop_address = L3Address();
-            if (nodeDataMap.count(node_addr) != 0) {
-                tmp_nextHop_address = nodeDataMap[node_addr].nextHop_address;
-                tmp_num_hops = nodeDataMap[node_addr].num_hops;
-            }
+            if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
 
-            if (    (nodeDataMap.count(node_addr) == 0) ||
-                    (nodeDataMap[node_addr].timestamp < nf.getTimestamp())
-            ){
-                // Create or update the data associated with this IP address
-                NodeData data_nest;
+                int tmp_num_hops = 100000;
+                L3Address tmp_nextHop_address = L3Address();
+                if (nodeDataMap.count(node_addr) != 0) {
+                    tmp_nextHop_address = nodeDataMap[node_addr].nextHop_address;
+                    tmp_num_hops = nodeDataMap[node_addr].num_hops;
+                }
+
+                if (    (nodeDataMap.count(node_addr) == 0) ||
+                        (nodeDataMap[node_addr].timestamp < nf.getTimestamp())
+                ){
+                    // Create or update the data associated with this IP address
+                    NodeData data_nest;
 
 
-                data_nest.timestamp = nf.getTimestamp();
-                data_nest.sequenceNumber = nf.getSequenceNumber();
-                data_nest.address = nf.getIpAddress();
-                data_nest.coord_x = nf.getCoord_x();
-                data_nest.coord_y = nf.getCoord_y();
+                    data_nest.timestamp = nf.getTimestamp();
+                    data_nest.sequenceNumber = nf.getSequenceNumber();
+                    data_nest.address = nf.getIpAddress();
+                    data_nest.coord_x = nf.getCoord_x();
+                    data_nest.coord_y = nf.getCoord_y();
 
-                data_nest.memoryActUsage = nf.getMemoryActUsage();
-                data_nest.memoryMaxUsage = nf.getMemoryMaxUsage();
-                data_nest.compActUsage = nf.getCompActUsage();
-                data_nest.compMaxUsage = nf.getCompMaxUsage();
+                    data_nest.memoryActUsage = nf.getMemoryActUsage();
+                    data_nest.memoryMaxUsage = nf.getMemoryMaxUsage();
+                    data_nest.compActUsage = nf.getCompActUsage();
+                    data_nest.compMaxUsage = nf.getCompMaxUsage();
 
-                data_nest.hasCamera = nf.getHasCamera();
-                data_nest.lockedCamera = nf.getLockedCamera();
+                    data_nest.hasCamera = nf.getHasCamera();
+                    data_nest.lockedCamera = nf.getLockedCamera();
 
-                data_nest.hasGPU = nf.getHasGPU();
-                data_nest.lockedGPU = nf.getLockedGPU();
+                    data_nest.hasGPU = nf.getHasGPU();
+                    data_nest.lockedGPU = nf.getLockedGPU();
 
-                data_nest.lockedFly = nf.getLockedFly();
+                    data_nest.lockedFly = nf.getLockedFly();
 
-                data_nest.nextHop_address = payload->getIpAddress();
-                data_nest.num_hops = nf.getNum_hops() + 1;
+                    data_nest.nextHop_address = payload->getIpAddress();
+                    data_nest.num_hops = nf.getNum_hops() + 1;
+                    data_nest.radius = nf.getRadius();
 
-//                if (    (nodeDataMap.count(node_addr) != 0) &&
-//                        (nodeDataMap[node_addr].num_hops < nf.getNum_hops())
-//                ){
-//                    data_nest.nextHop_address = nodeDataMap[node_addr].nextHop_address;
-//                    data_nest.num_hops = nodeDataMap[node_addr].num_hops;
-//                }
-//                else {
-//                    data_nest.nextHop_address = payload->getIpAddress();
-//                    data_nest.num_hops = nf.getNum_hops() + 1;
-//                }
+    //                if (    (nodeDataMap.count(node_addr) != 0) &&
+    //                        (nodeDataMap[node_addr].num_hops < nf.getNum_hops())
+    //                ){
+    //                    data_nest.nextHop_address = nodeDataMap[node_addr].nextHop_address;
+    //                    data_nest.num_hops = nodeDataMap[node_addr].num_hops;
+    //                }
+    //                else {
+    //                    data_nest.nextHop_address = payload->getIpAddress();
+    //                    data_nest.num_hops = nf.getNum_hops() + 1;
+    //                }
 
-                // Store or update the data in the map
-                nodeDataMap[node_addr] = data_nest;
-            }
+                    // Store or update the data in the map
+                    nodeDataMap[node_addr] = data_nest;
+                }
 
-            // Old next_hop was better
-            if (    (nodeDataMap.count(node_addr) != 0) &&
-                    (nodeDataMap[node_addr].num_hops > tmp_num_hops)
-            ){
-                nodeDataMap[node_addr].nextHop_address = tmp_nextHop_address;
-                nodeDataMap[node_addr].num_hops = tmp_num_hops;
+                // Old next_hop was better
+                if (    (nodeDataMap.count(node_addr) != 0) &&
+                        (nodeDataMap[node_addr].num_hops > tmp_num_hops)
+                ){
+                    nodeDataMap[node_addr].nextHop_address = tmp_nextHop_address;
+                    nodeDataMap[node_addr].num_hops = tmp_num_hops;
+                }
             }
         }
     }

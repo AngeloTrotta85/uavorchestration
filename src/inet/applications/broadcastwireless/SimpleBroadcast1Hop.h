@@ -23,6 +23,7 @@
 #include <set>
 #include <tuple>
 #include <algorithm> // for std::find
+#include <cmath>
 
 #include <numeric>  // for std::accumulate
 
@@ -64,6 +65,8 @@ public:
         bool lockedGPU;
 
         bool lockedFly;
+
+        double radius; //for partial net info
 
         L3Address nextHop_address;
         int num_hops;
@@ -126,7 +129,7 @@ public:
     enum TaskForwardMsgKinds { FORWARD = 1 };
     enum TaskAckMsgKinds { ACK_CHECK = 1 };
 
-    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE, HYBRID };
+    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE, PROGRESSIVE_FULL };
 
     // parameters
     std::vector<L3Address> destAddresses;
@@ -141,7 +144,7 @@ public:
     double availableMaxMemory;
     bool hasCamera;
     bool hasGPU;
-
+    double radius; //for partial net info
 
 
     // state
@@ -192,9 +195,10 @@ public:
 
     bool ack_func = true;
 
-    //DisseminationType dissType = HIERARCHICAL;
+    //DisseminationType dissType = HIERARCHICAL;// full table of nodes in network
     DisseminationType dissType = PROGRESSIVE;
-    //DisseminationType dissType = HYBRID;
+    //DisseminationType dissType = PROGRESSIVE_FULL;
+
 
     //static simsignal_t taskDeploymentTimeSignal;   // to record times
 
@@ -249,6 +253,7 @@ public:
 
     virtual void forwardTask();
     virtual void ackTask();
+    virtual void updateRadius();
 
     virtual void handleStartOperation(LifecycleOperation *operation) override;
     virtual void handleStopOperation(LifecycleOperation *operation) override;

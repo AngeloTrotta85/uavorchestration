@@ -34,6 +34,8 @@ class NodeInfo
     
     bool lockedFly;
     
+    double radius; //for partial net info
+    
     L3Address nextHop_address;
     int num_hops;
 }
@@ -64,6 +66,8 @@ class Heartbeat extends FieldsChunk
     bool lockedGPU;
     
     bool lockedFly;
+    
+    double radius; //for partial net info
     
     NodeInfo nodeInfoList[];
     

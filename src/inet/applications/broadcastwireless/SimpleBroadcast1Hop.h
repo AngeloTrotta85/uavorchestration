@@ -239,6 +239,7 @@ public:
 
     //virtual Ptr<TaskREQmessage> createPayloadForTask(L3Address& finaldest, L3Address& nexthopdest, TaskREQ& task, int ttl);
     virtual Ptr<TaskREQmessage> createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task);
+    virtual L3Address getBestNeighbor(TaskREQ& t);
 
     virtual TaskREQ parseTask();
     virtual bool isDeployFeasible(TaskREQ& task, NodeData node);
@@ -287,6 +288,7 @@ inline std::ostream& operator<<(std::ostream& os, const SimpleBroadcast1Hop::Nod
             << ", lockedFly: " << data.lockedFly
             << " ||| nextHop_address: " << data.nextHop_address
             << ", num_hops: " << data.num_hops
+            << ", radius: " << data.radius
             << " }";
 
     return os;

@@ -1497,6 +1497,22 @@ void SimpleBroadcast1Hop::processTaskREQ_ACKmessage(const Ptr<const TaskREQ_ACKm
 
 }
 
+L3Address SimpleBroadcast1Hop::getBestNeighbor(TaskREQ& t)
+{
+    //return best neighbor IP address to the given task
+    L3Address out = myAddress;
+    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
+        L3Address ipAddr = it->first;
+        NodeData data = it->second;
+        if (isDeployFeasible(t, data)){
+            out = ipAddr;
+            break;
+        }
+    }
+    return out;
+
+}
+
 void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr)
 {
     std::vector<L3Address> deployDest_out;
@@ -1564,6 +1580,24 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
     } else if (dissType == PROGRESSIVE){
         //TODO Progressive strategy with partial network knowledge
         //checks if this node meets the requirements, otherwise forwards to the best option (direction)
+        deployDest_out.clear();
+        ttlDest_out.clear();
+        NodeData node = getMyNodeData();
+        if (isDeployFeasible(t, node)){
+            deployTaskHere(t);
+        } else {
+            //choose one of my neighbors to forward the task
+            DestDetail dd = payload->getDestDetail(0);
+            L3Address finalDest = getBestNeighbor(t); //dd.getDest_ipAddress();
+            if (finalDest == myAddress) {
+                //Cannot deploy
+                EV_INFO << "CANNOT deploy task!" << endl;
+            } else {
+                int act_ttl = dd.getTtl();
+                deployDest_out.push_back(finalDest);
+                ttlDest_out.push_back(act_ttl - 1);
+            }
+        }
     }
 
 

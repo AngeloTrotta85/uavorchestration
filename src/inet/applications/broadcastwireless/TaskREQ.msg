@@ -35,6 +35,13 @@ enum DevType
     DEVTYPE_CLOUD = 1;
 };
 
+enum DeployType 
+{ 
+    HIERARCHICAL_MSG = 1;
+    PROGRESSIVE_MSG = 2;
+};
+
+
 
 class TaskREQ
 {
@@ -89,6 +96,8 @@ class TaskREQmessage extends FieldsChunk
     //L3Address nextHop_ipAddress;
     DestDetail destDetail[];
     
+    DeployType depStrategy;
+    
     TaskREQ task;
 }
 
@@ -97,6 +106,7 @@ class TaskREQ_ACKmessage extends FieldsChunk
 {
     L3Address dest_ipAddress;
     L3Address src_ipAddress;
+    
     
     TaskREQ task;
 }

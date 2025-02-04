@@ -81,7 +81,10 @@ class Change
     L3Address ipAddress;
 	// int num_hops;
     uint8_t parammeter;
-    double value;       
+    double value;
+    L3Address nextHop_address;
+    int num_hops;
+           
 } 
 
 class ChangesBlock extends FieldsChunk

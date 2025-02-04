@@ -37,7 +37,7 @@
 #include "inet/common/ModuleAccess.h"
 
 
-static bool gEnableDebug = false;
+static bool gEnableDebug = true;
 static inline void debugPrint(const char* fmt, ...)
 {
     if (!gEnableDebug)
@@ -802,13 +802,30 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 void SimpleBroadcast1Hop::sendPacket()
 {
     std::ostringstream str;
-    str << packetName << "-" << numSent;
-    Packet *packet = new Packet(str.str().c_str());
-    if (dontFragment)
-        packet->addTag<FragmentationReq>()->setDontFragment(true);
 
-    const auto& payload = createPayload();
+    if (dissType == HIERARCHICAL_CHANGES) {
+        str << "ChangesBlock" << "-" << numSent; //
+        Packet *packet = new Packet(str.str().c_str());
+        if (dontFragment)
+            packet->addTag<FragmentationReq>()->setDontFragment(true);
+        const auto& payload = createChangesPayload();
+        packet->insertAtBack(payload);
+        L3Address destAddr = chooseDestAddr();
+        emit(packetSentSignal, packet);
+        socket.sendTo(packet, destAddr, destPort);
 
+    } else {
+        str << packetName << "-" << numSent; //
+        Packet *packet = new Packet(str.str().c_str());
+        if (dontFragment)
+            packet->addTag<FragmentationReq>()->setDontFragment(true);
+        const auto& payload = createPayload();
+        packet->insertAtBack(payload);
+        L3Address destAddr = chooseDestAddr();
+        emit(packetSentSignal, packet);
+        socket.sendTo(packet, destAddr, destPort);
+
+    }
 //    const auto& payload = makeShared<Heartbeat>();
 //    payload->setChunkLength(B(par("messageLength")));
 //
@@ -856,10 +873,7 @@ void SimpleBroadcast1Hop::sendPacket()
 //    }
 //
 //    payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
-    packet->insertAtBack(payload);
-    L3Address destAddr = chooseDestAddr();
-    emit(packetSentSignal, packet);
-    socket.sendTo(packet, destAddr, destPort);
+
     numSent++;
 }
 
@@ -1088,7 +1102,7 @@ double SimpleBroadcast1Hop::getRanking(TaskREQ& t, NodeData& node){
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
 {
     std::vector<L3Address> ris;
-    if (dissType == HIERARCHICAL) return ris;
+    if (dissType == PROGRESSIVE) return ris;
 
     std::map<L3Address, NodeData> nodeDataMap_feasible;
     for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
@@ -1305,7 +1319,7 @@ void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task
             EV_INFO << "  Tag " << i << ": " << tag->str() << "\n";
         }
 
-        if (dissType == HIERARCHICAL) {
+        if (dissType != PROGRESSIVE) {
             //broadcast
             socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
         } else {
@@ -1381,7 +1395,7 @@ void SimpleBroadcast1Hop::manageNewTask(TaskREQ& task, bool generatedHereNow = f
     std::vector<int> ttls;
     std::vector<L3Address> deployDest = checkDeployDestination(task);
 
-    if (dissType == HIERARCHICAL) {
+    if (dissType != PROGRESSIVE) {
         if (generatedHereNow) {
             Task_generated_extra_info extra;
             extra.generation_time = simTime();
@@ -1570,7 +1584,7 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
 
     //Hierarchical: - if I'm destination, deploy, else, forward
     //Progressive: - if I fit requirements, deploy, else, forward
-    if (dissType == HIERARCHICAL) {
+    if (dissType == HIERARCHICAL || dissType == HIERARCHICAL_CHANGES) {
         //this is for hierarchical strategy
         for (int i = 0; i < payload->getDestDetailArraySize(); ++i) {
             DestDetail dd = payload->getDestDetail(i);
@@ -1589,18 +1603,8 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
             int act_ttl = dd.getTtl();
 
             if (finalDest == myAddress) {
-                // TODO here you need to choose among hierarchical vs progressive
-
-
-                // check if task already deployed
                 if (extra_info_deploy_tasks.count(packetId) == 0) {
-
                     EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
-
-                    //L3Address deployDest = checkDeployDestination(task);
-
-                    // hierarchical
-
                     deployTaskHere(t);
                 }
             }
@@ -1611,11 +1615,6 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
                 }
             }
         }
-    } else if (dissType == HIERARCHICAL_CHANGES){
-        //TODO Hierarchical with changes approach and full network knowledge
-
-
-
     } else if (dissType == PROGRESSIVE){
         //Progressive strategy with Aggregated network knowledge
         //checks if this node meets the requirements, otherwise forwards to the best option (direction)
@@ -1968,7 +1967,7 @@ void SimpleBroadcast1Hop::processHeartbeat(const Ptr<const Heartbeat>payload, L3
 
     updateRadius();
 
-    if (dissType != PROGRESSIVE) {
+    if (dissType == HIERARCHICAL) {
         size_t nodeArraySize = payload->getNodeInfoListArraySize();
         for (int i = 0; i < nodeArraySize; ++i) {
             NodeInfo nf = payload->getNodeInfoList(i);
@@ -2099,14 +2098,16 @@ void SimpleBroadcast1Hop::processPacket(Packet *pk)
         // Process here
         // Check if the packet contains Heartbeat data
         //if ((s.rfind("Heartbeat", 0)) && (pk->hasData<Heartbeat>())) {
+
+        debugPrint("Hello %s\n",s.c_str());
         if (s.rfind("Heartbeat", 0) == 0) {
             // Extract the Heartbeat payload
             const auto& payload = pk->peekData<Heartbeat>();
-
             processHeartbeat(payload, srcAddr, destAddr);
-
-        // Check if the packet contains TaskREQmessage data
-        //} else if ((s.rfind("Task", 0)) && (pk->hasData<TaskREQmessage>())) {
+        } else if (s.rfind("ChangesBlock", 0) == 0) {
+            // Extract the ChangesBlock payload
+            const auto& payload = pk->peekData<ChangesBlock>();
+            processChangesBlock(payload, srcAddr, destAddr);
         } else if (s.rfind("Task", 0) == 0) {
             // Extract the TaskREQmessage payload
             const auto& payload = pk->peekData<TaskREQmessage>();
@@ -2122,6 +2123,8 @@ void SimpleBroadcast1Hop::processPacket(Packet *pk)
         else {
             EV_WARN << "Received packet does not contain a Heartbeat payload." << endl;
         }
+        debugPrint("Hello 2 %s\n",s.c_str());
+
     }
 
     delete pk;
@@ -2186,6 +2189,9 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
     Change ch;
     ch.setSequenceNumber(seq);
     ch.setIpAddress(myAddress);
+    ch.setNextHop_address(myAddress);
+    ch.setNum_hops(0);
+
     //ch.setNum_hops(0);
     int stksize = stChanges.size();
     if ((abs((lastReport.getCoord_x() - mob->getCurrentPosition().x)/lastReport.getCoord_x()) * 100) > deltaCoord ||
@@ -2284,9 +2290,8 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
 
     //avoid packet oversize
     int i = 0;
-    while (!stChanges.empty() && i<1000){
+    while (!stChanges.empty() && i<100){
         Change cht = stChanges.at(0);
-        //std::cout << cht.getIpAddress() << " | " << ((int) cht.getParammeter()) << " | " << cht.getValue() << endl;
         payload->appendChangesList(cht);
         stChanges.pop_front();
         i++;
@@ -2345,8 +2350,8 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
                 nd.hasGPU = false;
                 nd.lockedGPU = false;
                 nd.lockedFly = false;
-//                nd.nextHop_address = payload->getIpAddress();
-//                nd.num_hops = nf.getNum_hops() + 1;
+                nd.nextHop_address = ch.getNextHop_address();
+                nd.num_hops = ch.getNum_hops() + 1;
                 nodeDataMap[node_addr] = nd;
                 for (int j=0; j<16; j++) nd.lastSeqNumber[j] = 0;
             } else {
@@ -2389,6 +2394,9 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
                 case fldLkFLY:
                     nd.lockedFly = (ch.getValue() == 1);
                     break;
+                case fldRadius:
+                    nd.radius = ch.getValue();
+                    break;
                 default:
                     EV_ERROR << "new unidentified field " << std::endl;
                     break;
@@ -2400,8 +2408,7 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
         }
 
     }
-    EV_INFO << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
-
+    //EV_INFO << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
 }
 
 void SimpleBroadcast1Hop::addChange(Change ch){

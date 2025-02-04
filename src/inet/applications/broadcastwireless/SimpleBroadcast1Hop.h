@@ -219,8 +219,8 @@ public:
     bool ack_func = true;
 
     //DisseminationType dissType = HIERARCHICAL;// full table of nodes in network
-    DisseminationType dissType = PROGRESSIVE;
-    //DisseminationType dissType = HIERARCHICAL_CHANGES;
+    //DisseminationType dissType = PROGRESSIVE;
+    DisseminationType dissType = HIERARCHICAL_CHANGES;
 
 
     //static simsignal_t taskDeploymentTimeSignal;   // to record times

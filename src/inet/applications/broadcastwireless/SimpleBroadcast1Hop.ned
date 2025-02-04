@@ -27,7 +27,8 @@ simple SimpleBroadcast1Hop like IApp
         bool hasGPU = default(true); 
         
         bool taskGeneration = default(false); 
-        volatile double taskCreationInterval @unit(s) = default(1s); 
+        double taskCreationInterval @unit(s) = default(1s); 
+        double taskCreationStart @unit(s) = default(10s); 
         
         string interfaceTableModule;   // The path to the InterfaceTable module
         string clockModule = default(""); // relative path of a module that implements IClock; optional

@@ -218,11 +218,16 @@ public:
 
     int reqSent = 0;
 
+    int netPktSent = 0;
+    long netPktSize = 0;
+
+
+
     bool ack_func = true;
 
     //DisseminationType dissType = HIERARCHICAL;// full table of nodes in network
-    //DisseminationType dissType = PROGRESSIVE;
-    DisseminationType dissType = HIERARCHICAL_CHANGES;
+    DisseminationType dissType = PROGRESSIVE;
+    //DisseminationType dissType = HIERARCHICAL_CHANGES;
 
 
     //static simsignal_t taskDeploymentTimeSignal;   // to record times
@@ -271,7 +276,6 @@ public:
 
     //virtual Ptr<TaskREQmessage> createPayloadForTask(L3Address& finaldest, L3Address& nexthopdest, TaskREQ& task, int ttl);
     virtual Ptr<TaskREQmessage> createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task);
-    virtual L3Address getBestNeighbor(TaskREQ& t);
 
     virtual TaskREQ parseTask();
     virtual bool isDeployFeasibleLocal(TaskREQ& task);

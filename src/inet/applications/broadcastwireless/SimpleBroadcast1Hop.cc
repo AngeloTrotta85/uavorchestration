@@ -77,6 +77,11 @@ void SimpleBroadcast1Hop::initialize(int stage)
     if (stage == INITSTAGE_LOCAL) {
         numSent = 0;
         numReceived = 0;
+        netPktSent = 0;
+        netPktSize = 0;
+
+        WATCH(netPktSent);
+        WATCH(netPktSize);
         WATCH(numSent);
         WATCH(numReceived);
 
@@ -126,6 +131,8 @@ void SimpleBroadcast1Hop::finish()
 {
     recordScalar("packets sent", numSent);
     recordScalar("packets received", numReceived);
+    recordScalar("OK - Info-layer packets sent", netPktSent);
+    recordScalar("OK - Info-layer traffic size", netPktSize);
 
     if (myAppAddr == 0) {
         int nnodes = this->getParentModule()->getVectorSize();
@@ -170,9 +177,15 @@ void SimpleBroadcast1Hop::finish()
 
         }
 
+        int sumNetPktSent = 0;
+        long sumNetPktSize = 0;
         for (int n = 0; n < nnodes; ++n) {
             SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
             L3Address n_ipaddr = appn->myAddress;
+            sumNetPktSent += appn->netPktSent;
+            sumNetPktSize += appn->netPktSize;
+
+
 
             for (auto& t_deploy : appn->assignedTask_list) {
                 std::pair<L3Address, uint32_t> key_map = std::make_pair(t_deploy.getGen_ipAddress(), t_deploy.getId());
@@ -193,6 +206,8 @@ void SimpleBroadcast1Hop::finish()
             }
         }
 
+        recordScalar("OK - Total Info-layer packets sent", sumNetPktSent);
+        recordScalar("OK - Total Info-layer traffic size", sumNetPktSize);
 
         std::vector<L3Address> onlyExpected_all;
         std::vector<L3Address> onlyActual_all;
@@ -677,7 +692,7 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 
     payload->setChunkLength(B(par("messageLength")));
 
-    payload->setSequenceNumber(numSent);
+    payload->setSequenceNumber(netPktSent);
     payload->setIpAddress(myAddress);
     payload->setCoord_x(mob->getCurrentPosition().x);
     payload->setCoord_y(mob->getCurrentPosition().y);
@@ -758,6 +773,9 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
             payload->setLockedFly((lockedFly && data.lockedFly));
         }
 
+        uint32_t s = sizeof(Heartbeat);
+        netPktSize += s;
+
 
     } else {
         //sending full node table data
@@ -801,6 +819,9 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 
             i++;
         }
+        uint32_t s = sizeof(Heartbeat) + i * sizeof(NodeInfo) ;
+        netPktSize += s;
+
     }
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
@@ -812,7 +833,7 @@ void SimpleBroadcast1Hop::sendPacket()
     std::ostringstream str;
 
     if (dissType == HIERARCHICAL_CHANGES) {
-        str << "Changes" << "-" << numSent; //
+        str << "Changes" << "-" << netPktSent; //
         Packet *packet = new Packet(str.str().c_str());
         if (dontFragment)
             packet->addTag<FragmentationReq>()->setDontFragment(true);
@@ -823,7 +844,7 @@ void SimpleBroadcast1Hop::sendPacket()
         socket.sendTo(packet, destAddr, destPort);
 
     } else {
-        str << packetName << "-" << numSent; //
+        str << packetName << "-" << netPktSent; //
         Packet *packet = new Packet(str.str().c_str());
         if (dontFragment)
             packet->addTag<FragmentationReq>()->setDontFragment(true);
@@ -834,6 +855,9 @@ void SimpleBroadcast1Hop::sendPacket()
         socket.sendTo(packet, destAddr, destPort);
 
     }
+    numSent++;
+    netPktSent++;
+
 //    const auto& payload = makeShared<Heartbeat>();
 //    payload->setChunkLength(B(par("messageLength")));
 //
@@ -882,7 +906,6 @@ void SimpleBroadcast1Hop::sendPacket()
 //
 //    payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
-    numSent++;
 }
 
 void SimpleBroadcast1Hop::processStart()
@@ -911,8 +934,8 @@ void SimpleBroadcast1Hop::processStart()
 
         if (par("taskGeneration").boolValue()){
             taskMsg->setKind(NEW_T);
-            clocktime_t d = par("taskCreationInterval");
-            scheduleClockEventAfter(d*3, taskMsg);
+            clocktime_t d = par("taskCreationStart");
+            scheduleClockEventAfter(d, taskMsg);
         }
         taskForwardMsg->setKind(FORWARD);
         //scheduleClockEventAfter(truncnormal(mean_tf, stddev_tf), taskForwardMsg);
@@ -1203,10 +1226,10 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
     std::vector<L3Address> ris;
     std::map<L3Address, double> nodeDataMap_score;
 
+    //create score map
     for (std::map<inet::L3Address, NodeData>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
         double score = calculateProgressiveScore(task, it->second);
-        if (score > 0.5)
-            nodeDataMap_score[it->first] = score;
+        nodeDataMap_score[it->first] = score;
     }
 
     EV_INFO << "checkDeployDestinationAmong_Progressive - Calculated SCORES: " << endl;
@@ -1243,7 +1266,7 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
 {
     std::vector<L3Address> ris;
-    if (dissType == PROGRESSIVE) return ris;
+    //if (dissType == PROGRESSIVE) return ris;
 
     std::map<L3Address, NodeData> nodeDataMap_feasible;
     //for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
@@ -1307,7 +1330,7 @@ SimpleBroadcast1Hop::NodeData SimpleBroadcast1Hop::getMyNodeData(){
     }
 
     mydata.timestamp = simTime();
-    mydata.sequenceNumber = numSent;
+    mydata.sequenceNumber = netPktSent;
     mydata.address = myAddress;
     mydata.coord_x = mob->getCurrentPosition().x;
     mydata.coord_y = mob->getCurrentPosition().y;
@@ -1332,38 +1355,6 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task
     std::map<L3Address, NodeData> nodeDataMap_all;
     NodeData mydata = getMyNodeData();
 
-//    double compActUsage = 0;
-//    double memActUsage = 0;
-//    bool lockedGPU = false;
-//    bool lockedCamera = false;
-//    bool lockedFly = false;
-//    for (size_t i = 0; i < assignedTask_list.size(); ++i) {
-//        if ((simTime() < assignedTask_list[i].getEnd_timestamp()) && (simTime() >= assignedTask_list[i].getStart_timestamp())){
-//            compActUsage += assignedTask_list[i].getReqCPU();
-//            memActUsage += assignedTask_list[i].getReqMemory();
-//            if (assignedTask_list[i].getLockGPU()) lockedGPU = true;
-//            if (assignedTask_list[i].getLockCamera()) lockedCamera = true;
-//            if (assignedTask_list[i].getReq_lock_flyengine()) lockedFly = true;
-//        }
-//    }
-//
-//    mydata.timestamp = simTime();
-//    mydata.sequenceNumber = numSent;
-//    mydata.address = myAddress;
-//    mydata.coord_x = mob->getCurrentPosition().x;
-//    mydata.coord_y = mob->getCurrentPosition().y;
-//    mydata.memoryActUsage = memActUsage;
-//    mydata.memoryMaxUsage = availableMaxMemory;
-//    mydata.compActUsage = compActUsage;
-//    mydata.compMaxUsage = computationalPower;
-//    mydata.hasCamera = hasCamera;
-//    mydata.lockedCamera = lockedCamera;
-//    mydata.hasGPU = hasGPU;
-//    mydata.lockedGPU = lockedGPU;
-//    mydata.lockedFly = lockedFly;
-//    mydata.nextHop_address = myAddress;
-//    mydata.num_hops = 0;
-
     nodeDataMap_all[myAddress] = mydata;
     for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
         if (it->first != avoidAddress)
@@ -1375,10 +1366,10 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestination(TaskREQ& task
         EV_INFO << el.first << " | " << el.second << endl;
     }
 
-    if (dissType == HIERARCHICAL)
-        return checkDeployDestinationAmong(task, nodeDataMap_all);
-    else
+    if (dissType == PROGRESSIVE)
         return checkDeployDestinationAmong_Progressive(task, nodeDataMap_all);
+    else
+        return checkDeployDestinationAmong(task, nodeDataMap_all);
 
 //    size_t mapSize = nodeDataMap.size();
 //    double r = uniform(0, 1);
@@ -1412,7 +1403,7 @@ Ptr<TaskREQmessage> SimpleBroadcast1Hop::createPayloadForTask(std::vector<std::t
         payload->setDepStrategy(PROGRESSIVE_MSG);
     }
     else {
-        payload->setDepStrategy(HIERARCHICAL_MSG); //TODO
+        payload->setDepStrategy(HIERARCHICAL_MSG); //Hierarchical-changes
     }
 
 
@@ -1438,7 +1429,6 @@ Ptr<TaskREQmessage> SimpleBroadcast1Hop::createPayloadForTask(std::vector<std::t
 void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task, std::vector<int>& ttl)
 {
     std::vector<std::tuple<L3Address, L3Address, int>> dest_next_ttl;
-
     int i = 0;
     for (auto& d : dest){
         if (nodeDataMap.count(d) != 0) {
@@ -1474,14 +1464,8 @@ void SimpleBroadcast1Hop::sendTaskTo(std::vector<L3Address>& dest, TaskREQ& task
             EV_INFO << "  Tag " << i << ": " << tag->str() << "\n";
         }
 
-        if (dissType != PROGRESSIVE) {
-            //broadcast
-            socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
-        } else {
-            socket.sendTo(packet, dest[0], destPort);
-        }
-
-        //reqSent++;
+        socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+        numSent++;
     }
     else {
         EV_WARN << "SimpleBroadcast1Hop::sendTaskTo NO DESTINATION FOUND FOR THE TASK" << endl;
@@ -1562,39 +1546,27 @@ void SimpleBroadcast1Hop::manageNewTask(TaskREQ& task, bool generatedHereNow, L3
     std::vector<int> ttls;
     std::vector<L3Address> deployDest = checkDeployDestination(task);
 
-    if (dissType != PROGRESSIVE) {
-        if (generatedHereNow) {
-            Task_generated_extra_info extra;
-            extra.generation_time = simTime();
+    if (generatedHereNow) {
+        Task_generated_extra_info extra;
+        extra.generation_time = simTime();
+        //getting theoretical deployable nodes
+        int nnodes = this->getParentModule()->getVectorSize();
+        for (int n = 0; n < nnodes; ++n) {
+            SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
+            L3Address n_ipaddr = appn->myAddress;
+            NodeData n_data = appn->getMyNodeData();
 
-            int nnodes = this->getParentModule()->getVectorSize();
-            for (int n = 0; n < nnodes; ++n) {
-                SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
-                L3Address n_ipaddr = appn->myAddress;
-                NodeData n_data = appn->getMyNodeData();
-
-                if (isDeployFeasible(task, n_data) ) {
-                    extra.deployable_nodes_at_generation.push_back(n_ipaddr);
-                }
+            if (isDeployFeasible(task, n_data) ) {
+                extra.deployable_nodes_at_generation.push_back(n_ipaddr);
             }
-
-            extra.decision_nodes_at_generation.insert(extra.decision_nodes_at_generation.end(), deployDest.begin(), deployDest.end());
-
-            extra_info_generated_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
         }
-    } else {
-        L3Address finalDest = getBestNeighbor(task);
-        if (finalDest == myAddress) {
-            NodeData node = getMyNodeData();
-            if (isDeployFeasible(task, node)){
-                deployTaskHere(task);
-            }
-        } else {
-            deployDest_out.push_back(finalDest);
-            ttls.push_back(10);
-        }
+
+        extra.decision_nodes_at_generation.insert(extra.decision_nodes_at_generation.end(), deployDest.begin(), deployDest.end());
+
+        extra_info_generated_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
     }
-    //if (deployDest == Ipv4Address::UNSPECIFIED_ADDRESS) {
+
+
     if (deployDest.size() == 0) {
         EV_INFO << "NO place where to deploy TASK!" << endl;
     }
@@ -1710,28 +1682,6 @@ void SimpleBroadcast1Hop::processTaskREQ_ACKmessage(const Ptr<const TaskREQ_ACKm
 
 }
 
-L3Address SimpleBroadcast1Hop::getBestNeighbor(TaskREQ& t)
-{
-    //return best neighbor IP address to the given task
-    double rk;
-    NodeData data = getMyNodeData();
-    double outRk = calculateProgressiveScore(t, data);
-    L3Address out = data.address;
-    for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
-        L3Address ipAddr = it->first;
-        data = it->second;
-        if (isDeployFeasible(t, data)){
-            rk = calculateProgressiveScore(t, data);
-            if (rk >= outRk){
-                out = ipAddr;
-                outRk = rk;
-            }
-        }
-    }
-    return out;
-
-}
-
 
 void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr)
 {
@@ -1787,25 +1737,23 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
         //checks if this node meets the requirements, otherwise forwards to the best option (direction)
         deployDest_out.clear();
         ttlDest_out.clear();
-        NodeData node = getMyNodeData();
-        if (isDeployFeasible(t, node)){
-            to_ack = true;
-            deployTaskHere(t);
-        } else {
-            //choose one of my neighbors to forward the task
-            DestDetail dd = payload->getDestDetail(0);
-            L3Address finalDest = getBestNeighbor(t); //dd.getDest_ipAddress();
+
+        std::vector<L3Address> deployIpOptions = checkDeployDestination(t);
+
+        for (int i = 0; i < deployIpOptions.size(); ++i) {
+            L3Address finalDest = deployIpOptions[i];
             if (finalDest == myAddress) {
-                //Cannot deploy
-                EV_INFO << "CANNOT deploy task!" << endl;
+                if (extra_info_deploy_tasks.count(packetId) == 0) {
+                    EV_INFO << "RECEIVED TASK. It's for me! Deploying..." << endl;
+                    deployTaskHere(t);
+                    to_ack = true;
+                }
             } else {
-                int act_ttl = dd.getTtl();
-                deployDest_out.push_back(finalDest);
-                ttlDest_out.push_back(act_ttl - 1);
+                    deployDest_out.push_back(finalDest);
+                    ttlDest_out.push_back(1);
             }
         }
     }
-
 
     //FORWARDING
     if (deployDest_out.size() > 0) {
@@ -1874,6 +1822,7 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
         packet->insertAtBack(payload);
 
         socket.sendTo(packet, L3Address("255.255.255.255"), destPort);
+        numSent++;
 
     }
 
@@ -2064,7 +2013,7 @@ void SimpleBroadcast1Hop::refreshDisplay() const
     ApplicationBase::refreshDisplay();
 
     char buf[100];
-    sprintf(buf, "rcvd: %d pks\nsent: %d pks", numReceived, numSent);
+    sprintf(buf, "rcvd: %d pks\nsent: %d pks", numReceived, netPktSent);
     getDisplayString().setTagArg("t", 0, buf);
 }
 
@@ -2455,7 +2404,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
 
     //avoid packet oversize
     int i = 0;
-    while (!stChanges.empty() && i<100){
+    while (!stChanges.empty() && i<500){
         Change cht = stChanges.at(0);
         payload->appendChangesList(cht);
         stChanges.pop_front();
@@ -2472,7 +2421,9 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
     //payload size
-    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change) + 1;
+    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
+
+    netPktSize += s;
 
     //payload->setChunkLength(B(s));
     payload->setChunkLength(B(par("messageLength")));

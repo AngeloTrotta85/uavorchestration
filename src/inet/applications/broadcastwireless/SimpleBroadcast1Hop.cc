@@ -714,7 +714,7 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 
 
     if (dissType == PROGRESSIVE) {
-        //in partial knowledge, I will send only 1-hop nodes
+        //in Aggregated knowledge, I will send only 1-hop nodes
         //choose the best metrics between me and my 1-hop neighbors and broadcast it
         updateRadius();
         payload->setRadius(radius);
@@ -755,8 +755,7 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
                                     payload->getLockedGPU()&&data.lockedGPU);
 
             //rule for LockedFly
-            if (lockedFly && !data.lockedFly)
-                payload->setLockedFly(false);
+            payload->setLockedFly((lockedFly && data.lockedFly));
         }
 
 
@@ -958,7 +957,7 @@ void SimpleBroadcast1Hop::ackTask()
             // pointing to the next element after the erased one
             it = ackVector.erase(it);
 
-            EV_INFO << "ACK scaduto sending TASK again" << endl;
+            EV_INFO << "ACK expired sending TASK again" << endl;
         }
         else
         {
@@ -1071,6 +1070,20 @@ bool SimpleBroadcast1Hop::isDeployFeasible(TaskREQ& task, NodeData node) {
 
     return ris;
 }
+
+
+
+double SimpleBroadcast1Hop::getRanking(TaskREQ& t, NodeData& node){
+
+    //TODO
+    //
+
+
+    return 1;
+
+}
+
+
 
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)
 {
@@ -1538,16 +1551,6 @@ L3Address SimpleBroadcast1Hop::getBestNeighbor(TaskREQ& t)
 
 }
 
-double SimpleBroadcast1Hop::getRanking(TaskREQ& t, NodeData& node){
-
-    //TODO
-
-
-
-    return 1;
-
-}
-
 
 void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>payload, L3Address srcAddr, L3Address destAddr)
 {
@@ -1608,13 +1611,13 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
                 }
             }
         }
-    } else if (dissType == PROGRESSIVE_FULL){
-        //TODO Progressive strategy with full network knowledge
-        //check if THIS node is the best one to deploy, else, forward it to the next hop
+    } else if (dissType == HIERARCHICAL_CHANGES){
+        //TODO Hierarchical with changes approach and full network knowledge
+
 
 
     } else if (dissType == PROGRESSIVE){
-        //TODO Progressive strategy with partial network knowledge
+        //Progressive strategy with Aggregated network knowledge
         //checks if this node meets the requirements, otherwise forwards to the best option (direction)
         deployDest_out.clear();
         ttlDest_out.clear();
@@ -2146,6 +2149,284 @@ void SimpleBroadcast1Hop::handleCrashOperation(LifecycleOperation *operation)
     cancelClockEvent(selfMsg);
     socket.destroy(); // in real operating systems, program crash detected by OS and OS closes sockets of crashed programs.
 }
+
+
+Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
+{
+
+    //update NodeInfo with assigned tasks
+
+    double compActUsage = 0;
+    double memActUsage = 0;
+    bool lockedGPU = false;
+    bool lockedCamera = false;
+    bool lockedFly = false;
+    for (size_t i = 0; i < assignedTask_list.size(); ++i) {
+        if ((simTime() < assignedTask_list[i].getEnd_timestamp()) && (simTime() >= assignedTask_list[i].getStart_timestamp())){
+            compActUsage += assignedTask_list[i].getReqCPU();
+            memActUsage += assignedTask_list[i].getReqMemory();
+            if (assignedTask_list[i].getLockGPU()) lockedGPU = true;
+            if (assignedTask_list[i].getLockCamera()) lockedCamera = true;
+            if (assignedTask_list[i].getReq_lock_flyengine()) lockedFly = true;
+        }
+    }
+
+
+    const auto& payload = makeShared<ChangesBlock>();
+
+    //getting changes of THIS node...
+
+    uint32_t seq = lastReport.getSequenceNumber() + 1;
+
+    double deltaComp = 5; // acceptable delta without notification
+    double deltaMemory = 5;
+    double deltaCoord = 2; // percent (%)
+
+    //comparing actual values with last reported ones over deltas
+    Change ch;
+    ch.setSequenceNumber(seq);
+    ch.setIpAddress(myAddress);
+    //ch.setNum_hops(0);
+    int stksize = stChanges.size();
+    if ((abs((lastReport.getCoord_x() - mob->getCurrentPosition().x)/lastReport.getCoord_x()) * 100) > deltaCoord ||
+            (abs((lastReport.getCoord_y() - mob->getCurrentPosition().y)/lastReport.getCoord_y()) * 100)  > deltaCoord  ) {
+        //report new position
+        ch.setParammeter(fldPOS_x);
+        ch.setValue(mob->getCurrentPosition().x);
+        lastReport.setCoord_x(mob->getCurrentPosition().x);
+        stChanges.push_back(ch);
+
+        ch.setParammeter(fldPOS_y);
+        ch.setValue(mob->getCurrentPosition().y);
+        lastReport.setCoord_y(mob->getCurrentPosition().y);
+        stChanges.push_back(ch);
+
+    }
+
+    if (lastReport.getCompMaxUsage() != computationalPower) {
+        //report Max CPU
+        ch.setParammeter(fldMaxCPU);
+        ch.setValue(computationalPower);
+        lastReport.setCompMaxUsage(computationalPower);
+        stChanges.push_back(ch);
+    }
+
+    if (lastReport.getMemoryMaxUsage() != availableMaxMemory) {
+        //report MAX Memory
+        ch.setParammeter(fldMaxMEM);
+        ch.setValue(availableMaxMemory);
+        lastReport.setMemoryMaxUsage(availableMaxMemory);
+        stChanges.push_back(ch);
+
+    }
+
+    if (abs(lastReport.getCompActUsage() - compActUsage) > deltaComp) {
+        //report CPU
+        ch.setParammeter(fldActCPU);
+        ch.setValue(compActUsage);
+        lastReport.setCompActUsage(compActUsage);
+        stChanges.push_back(ch);
+    }
+
+    if (abs(lastReport.getMemoryActUsage() - memActUsage) > deltaMemory) {
+        //report Memory
+        ch.setParammeter(fldActMEM);
+        ch.setValue(memActUsage);
+        lastReport.setMemoryActUsage(memActUsage);
+        stChanges.push_back(ch);
+
+    }
+
+    if (lastReport.getHasCamera() != hasCamera) {
+        //report Camera
+        ch.setParammeter(fldCAM);
+        ch.setValue((hasCamera ? 1 : 0));
+        lastReport.setHasCamera(hasCamera);
+        stChanges.push_back(ch);
+    }
+
+    if (lastReport.getHasGPU() != hasGPU) {
+        //report GPU
+        ch.setParammeter(fldGPU);
+        ch.setValue((hasGPU? 1 : 0));
+        lastReport.setHasGPU(hasGPU);
+        stChanges.push_back(ch);
+    }
+
+    if (lastReport.getLockedCamera() != lockedCamera) {
+        //report locked camera
+        ch.setParammeter(fldLkCAM);
+        ch.setValue((lockedCamera ? 1 : 0));
+        lastReport.setLockedCamera(lockedCamera);
+        stChanges.push_back(ch);
+    }
+
+    if (lastReport.getLockedFly() != lockedFly) {
+        //report locked fly
+        ch.setParammeter(fldLkFLY);
+        ch.setValue((lockedFly ? 1 : 0));
+        lastReport.setLockedFly(lockedFly);
+        stChanges.push_back(ch);
+
+    }
+
+    if (lastReport.getLockedGPU() != lockedGPU) {
+        //report locked GPU
+        ch.setParammeter(fldLkGPU);
+        ch.setValue((lockedGPU ? 1 : 0));
+        lastReport.setLockedGPU(lockedGPU);
+        stChanges.push_back(ch);
+    }
+
+    if (stksize < stChanges.size()) {
+        lastReport.setSequenceNumber(seq);
+    }
+
+    //avoid packet oversize
+    int i = 0;
+    while (!stChanges.empty() && i<1000){
+        Change cht = stChanges.at(0);
+        //std::cout << cht.getIpAddress() << " | " << ((int) cht.getParammeter()) << " | " << cht.getValue() << endl;
+        payload->appendChangesList(cht);
+        stChanges.pop_front();
+        i++;
+    }
+
+
+
+    payload->setChangesCount(payload->getChangesListArraySize());
+    if (payload->getChangesListArraySize() > 0) {
+        EV_INFO << "sending  " << payload->getChangesListArraySize() << " changes " << std::endl;
+    }
+
+    payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
+
+    //payload size
+    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
+
+    payload->setChunkLength(B(s));
+
+    return payload;
+
+
+}
+
+void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>payload, L3Address srcAddr, L3Address destAddr)
+{
+
+    // std::cout << "Received ChangesBlock! Changes:" << payload->getChangesCount() <<  std::endl;
+    L3Address loopbackAddress("127.0.0.1"); // Define the loopback address
+
+    //Change *ch = new Change[payload->getChangesCount()];
+    Change ch;
+    for (int i=0; i<payload->getChangesCount(); i++){
+        ch = payload->getChangesList(i);
+//        std::cout << ch.getIpAddress() << " | " << ((int) ch.getParammeter()) << " | " << ch.getValue() << endl;
+
+        L3Address node_addr = ch.getIpAddress();
+        if ((node_addr != loopbackAddress) && (node_addr != myAddress)) {
+            int tmp_num_hops = 100000;
+            L3Address tmp_nextHop_address = L3Address();
+
+            NodeData nd;
+            if (nodeDataMap.count(node_addr) != 1) {
+                //new node
+                nd.timestamp = payload->getTimestamp();
+                nd.sequenceNumber = ch.getSequenceNumber();
+                nd.address = node_addr;
+                nd.coord_x = 0;
+                nd.coord_y = 0;
+                nd.memoryActUsage = 0;
+                nd.memoryMaxUsage = 0;
+                nd.compActUsage = 0;
+                nd.compMaxUsage = 0;
+                nd.hasCamera = false;
+                nd.lockedCamera = false;
+                nd.hasGPU = false;
+                nd.lockedGPU = false;
+                nd.lockedFly = false;
+//                nd.nextHop_address = payload->getIpAddress();
+//                nd.num_hops = nf.getNum_hops() + 1;
+                nodeDataMap[node_addr] = nd;
+                for (int j=0; j<16; j++) nd.lastSeqNumber[j] = 0;
+            } else {
+                nd = nodeDataMap[node_addr];
+            }
+
+            //add sequence number verification
+            if (nd.lastSeqNumber[ch.getParammeter()] < ch.getSequenceNumber()) {
+                switch (ch.getParammeter()){
+                case fldPOS_x:
+                    nd.coord_x = ch.getValue();
+                    break;
+                case fldPOS_y:
+                    nd.coord_y = ch.getValue();
+                    break;
+                case fldActCPU:
+                    nd.compActUsage = ch.getValue();
+                    break;
+                case fldActMEM:
+                    nd.memoryActUsage = ch.getValue();
+                    break;
+                case fldMaxCPU:
+                    nd.compMaxUsage = ch.getValue();
+                    break;
+                case fldMaxMEM:
+                    nd.memoryMaxUsage = ch.getValue();
+                    break;
+                case fldGPU:
+                    nd.hasGPU = (ch.getValue() == 1);
+                    break;
+                case fldCAM:
+                    nd.hasCamera = (ch.getValue() == 1);
+                    break;
+                case fldLkGPU:
+                    nd.lockedGPU = (ch.getValue() == 1);
+                    break;
+                case fldLkCAM:
+                    nd.lockedCamera = (ch.getValue() == 1);
+                    break;
+                case fldLkFLY:
+                    nd.lockedFly = (ch.getValue() == 1);
+                    break;
+                default:
+                    EV_ERROR << "new unidentified field " << std::endl;
+                    break;
+                }
+                nd.lastSeqNumber[ch.getParammeter()] = ch.getSequenceNumber();
+                nodeDataMap[node_addr] = nd;
+            }
+            addChange(ch);
+        }
+
+    }
+    EV_INFO << myAddress << " nodeDataMap size: " << nodeDataMap.size() << std::endl;
+
+}
+
+void SimpleBroadcast1Hop::addChange(Change ch){
+    bool cy = true;
+    for (int i=0; i<stChanges.size(); i++){
+        if (stChanges[i].getIpAddress() ==ch.getIpAddress() &&
+                stChanges[i].getParammeter() == ch.getParammeter()) {
+            cy = false;
+            if (ch.getSequenceNumber() > stChanges[i].getSequenceNumber() ) {
+                //update element
+                stChanges[i].setValue(ch.getValue());
+                stChanges[i].setSequenceNumber(ch.getSequenceNumber());
+            }
+        }
+    }
+    if (cy) {
+        //add element
+        stChanges.push_back(ch);
+    }
+}
+
+
+
+
+
 
 } // namespace inet
 

@@ -34,7 +34,7 @@ class NodeInfo
     
     bool lockedFly;
     
-    double radius; //for partial net info
+    double radius; //for Aggregated net info
     
     L3Address nextHop_address;
     int num_hops;
@@ -67,8 +67,30 @@ class Heartbeat extends FieldsChunk
     
     bool lockedFly;
     
-    double radius; //for partial net info
+    double radius; //for Aggregated Method
     
     NodeInfo nodeInfoList[];
     
 }
+
+
+//Full w/ Changes Protocol aproach
+class Change
+{
+    uint32_t sequenceNumber;
+    L3Address ipAddress;
+	// int num_hops;
+    uint8_t parammeter;
+    double value;       
+} 
+
+class ChangesBlock extends FieldsChunk
+{
+    simtime_t timestamp;
+    uint32_t ChangesCount;
+    Change ChangesList[];    
+}
+
+
+
+

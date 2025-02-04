@@ -24,6 +24,7 @@
 #include <tuple>
 #include <algorithm> // for std::find
 #include <cmath>
+#include <deque>
 
 #include <numeric>  // for std::accumulate
 
@@ -39,6 +40,24 @@
 namespace inet {
 
 extern template class ClockUserModuleMixin<ApplicationBase>;
+
+enum idField : uint8_t { //Field Id for Aggregated net info
+    fldActCPU,
+    fldMaxCPU,
+    fldActMEM,
+    fldMaxMEM,
+    fldPOS_x,
+    fldPOS_y,
+    fldGPU,
+    fldCAM,
+    fldLkCAM,
+    fldLkFLY,
+    fldLkGPU,
+    fldRadius
+};
+
+
+
 
 /**
  * UDP application. See NED for more info.
@@ -67,6 +86,7 @@ public:
         bool lockedFly;
 
         double radius; //for partial net info
+        uint32_t lastSeqNumber[16]; //last received sequence number for each field - Changes Approach
 
         L3Address nextHop_address;
         int num_hops;
@@ -129,7 +149,7 @@ public:
     enum TaskForwardMsgKinds { FORWARD = 1 };
     enum TaskAckMsgKinds { ACK_CHECK = 1 };
 
-    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE, PROGRESSIVE_FULL };
+    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE, HIERARCHICAL_CHANGES };
 
     // parameters
     std::vector<L3Address> destAddresses;
@@ -144,7 +164,10 @@ public:
     double availableMaxMemory;
     bool hasCamera;
     bool hasGPU;
-    double radius; //for partial net info
+    double radius; //for Aggregated net info
+
+    NodeInfo lastReport; // for Changes approach
+    std::deque<Change> stChanges; // for Changes approach
 
 
     // state
@@ -197,7 +220,7 @@ public:
 
     //DisseminationType dissType = HIERARCHICAL;// full table of nodes in network
     DisseminationType dissType = PROGRESSIVE;
-    //DisseminationType dissType = PROGRESSIVE_FULL;
+    //DisseminationType dissType = HIERARCHICAL_CHANGES;
 
 
     //static simsignal_t taskDeploymentTimeSignal;   // to record times
@@ -236,6 +259,13 @@ public:
     virtual void processStart();
     virtual void processSend();
     virtual void processStop();
+
+    //for Changes Approach
+    virtual void processChangesBlock(const Ptr<const ChangesBlock> payload, L3Address srcAddr, L3Address destAddr);
+    virtual void addChange(Change ch);
+    virtual Ptr<ChangesBlock> createChangesPayload();
+
+
 
     //virtual Ptr<TaskREQmessage> createPayloadForTask(L3Address& finaldest, L3Address& nexthopdest, TaskREQ& task, int ttl);
     virtual Ptr<TaskREQmessage> createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task);
@@ -290,7 +320,9 @@ inline std::ostream& operator<<(std::ostream& os, const SimpleBroadcast1Hop::Nod
             << " ||| nextHop_address: " << data.nextHop_address
             << ", num_hops: " << data.num_hops
             << ", radius: " << data.radius
-            << " }";
+            << ", lastSeqNumber: ";
+            for (int i=0; i<16; i++) os << data.lastSeqNumber[i] << ","; //for Changes approach
+            os << " }";
 
     return os;
 }

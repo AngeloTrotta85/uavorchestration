@@ -33,18 +33,11 @@ PROJECTRELATIVE_PATH = src
 O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 
 # Object files for local .cc, .msg and .sm files
-OBJS = \
-    $O/inet/applications/broadcastwireless/SimpleBroadcast1Hop.o \
-    $O/inet/applications/orchestration/TaskGenerator.o \
-    $O/inet/routing/aodv/Oaodv.o \
-    $O/inet/applications/broadcastwireless/Heartbeat_m.o \
-    $O/inet/applications/broadcastwireless/SendBestProt_m.o \
-    $O/inet/applications/broadcastwireless/TaskREQ_m.o
+OBJS = $O/inet/applications/broadcastwireless/SimpleBroadcast1Hop.o $O/inet/applications/orchestration/TaskGenerator.o $O/inet/routing/aodv/Oaodv.o $O/inet/applications/broadcastwireless/Heartbeat_m.o $O/inet/applications/broadcastwireless/TaskREQ_m.o
 
 # Message files
 MSGFILES = \
     inet/applications/broadcastwireless/Heartbeat.msg \
-    inet/applications/broadcastwireless/SendBestProt.msg \
     inet/applications/broadcastwireless/TaskREQ.msg
 
 # SM files

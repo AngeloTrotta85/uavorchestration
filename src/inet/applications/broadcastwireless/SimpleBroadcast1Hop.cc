@@ -37,7 +37,7 @@
 #include "inet/common/ModuleAccess.h"
 
 
-static bool gEnableDebug = true;
+static bool gEnableDebug = false;
 static inline void debugPrint(const char* fmt, ...)
 {
     if (!gEnableDebug)
@@ -812,7 +812,7 @@ void SimpleBroadcast1Hop::sendPacket()
     std::ostringstream str;
 
     if (dissType == HIERARCHICAL_CHANGES) {
-        str << "ChangesBlock" << "-" << numSent; //
+        str << "Changes" << "-" << numSent; //
         Packet *packet = new Packet(str.str().c_str());
         if (dontFragment)
             packet->addTag<FragmentationReq>()->setDontFragment(true);
@@ -1715,13 +1715,13 @@ L3Address SimpleBroadcast1Hop::getBestNeighbor(TaskREQ& t)
     //return best neighbor IP address to the given task
     double rk;
     NodeData data = getMyNodeData();
-    double outRk = getRanking(t, data);
+    double outRk = calculateProgressiveScore(t, data);
     L3Address out = data.address;
     for (std::map<inet::L3Address, NodeData>::iterator it = nodeDataMap.begin(); it != nodeDataMap.end(); ++it) {
         L3Address ipAddr = it->first;
         data = it->second;
         if (isDeployFeasible(t, data)){
-            rk = getRanking(t, data);
+            rk = calculateProgressiveScore(t, data);
             if (rk >= outRk){
                 out = ipAddr;
                 outRk = rk;
@@ -2266,12 +2266,11 @@ void SimpleBroadcast1Hop::processPacket(Packet *pk)
         // Check if the packet contains Heartbeat data
         //if ((s.rfind("Heartbeat", 0)) && (pk->hasData<Heartbeat>())) {
 
-        debugPrint("Hello %s\n",s.c_str());
         if (s.rfind("Heartbeat", 0) == 0) {
             // Extract the Heartbeat payload
             const auto& payload = pk->peekData<Heartbeat>();
             processHeartbeat(payload, srcAddr, destAddr);
-        } else if (s.rfind("ChangesBlock", 0) == 0) {
+        } else if (s.rfind("Changes", 0) == 0) {
             // Extract the ChangesBlock payload
             const auto& payload = pk->peekData<ChangesBlock>();
             processChangesBlock(payload, srcAddr, destAddr);
@@ -2290,7 +2289,6 @@ void SimpleBroadcast1Hop::processPacket(Packet *pk)
         else {
             EV_WARN << "Received packet does not contain a Heartbeat payload." << endl;
         }
-        debugPrint("Hello 2 %s\n",s.c_str());
 
     }
 
@@ -2357,7 +2355,7 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
     ch.setSequenceNumber(seq);
     ch.setIpAddress(myAddress);
     ch.setNextHop_address(myAddress);
-    ch.setNum_hops(0);
+    ch.setHops(0);
 
     //ch.setNum_hops(0);
     int stksize = stChanges.size();
@@ -2474,9 +2472,10 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
 
     //payload size
-    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
+    uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change) + 1;
 
-    payload->setChunkLength(B(s));
+    //payload->setChunkLength(B(s));
+    payload->setChunkLength(B(par("messageLength")));
 
     return payload;
 
@@ -2518,7 +2517,7 @@ void SimpleBroadcast1Hop::processChangesBlock(const Ptr<const ChangesBlock>paylo
                 nd.lockedGPU = false;
                 nd.lockedFly = false;
                 nd.nextHop_address = ch.getNextHop_address();
-                nd.num_hops = ch.getNum_hops() + 1;
+                nd.num_hops = ch.getHops() + 1;
                 nodeDataMap[node_addr] = nd;
                 for (int j=0; j<16; j++) nd.lastSeqNumber[j] = 0;
             } else {

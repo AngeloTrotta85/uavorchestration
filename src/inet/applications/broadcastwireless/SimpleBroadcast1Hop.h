@@ -160,7 +160,8 @@ public:
     clocktime_t stopTime;
     bool dontFragment = false;
     const char *packetName = nullptr;
-    //
+    const char *packetChangesName = nullptr;
+       //
     double computationalPower;    // computational Power: [operation/sec]
     double availableMaxMemory;
     bool hasCamera;
@@ -271,7 +272,6 @@ public:
     //virtual Ptr<TaskREQmessage> createPayloadForTask(L3Address& finaldest, L3Address& nexthopdest, TaskREQ& task, int ttl);
     virtual Ptr<TaskREQmessage> createPayloadForTask(std::vector<std::tuple<L3Address, L3Address, int>>& finaldest_next_ttl, TaskREQ& task);
     virtual L3Address getBestNeighbor(TaskREQ& t);
-    virtual double getRanking(TaskREQ& t, NodeData& node);
 
     virtual TaskREQ parseTask();
     virtual bool isDeployFeasibleLocal(TaskREQ& task);

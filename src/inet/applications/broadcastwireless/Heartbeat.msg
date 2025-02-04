@@ -79,12 +79,10 @@ class Change
 {
     uint32_t sequenceNumber;
     L3Address ipAddress;
-	// int num_hops;
     uint8_t parammeter;
     double value;
+    int hops;           
     L3Address nextHop_address;
-    int num_hops;
-           
 } 
 
 class ChangesBlock extends FieldsChunk

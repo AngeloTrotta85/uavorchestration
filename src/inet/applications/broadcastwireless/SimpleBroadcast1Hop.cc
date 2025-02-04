@@ -1151,7 +1151,6 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
     }
 
     return ris;
-
 }
 
 std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong(TaskREQ& task, std::map<L3Address, NodeData>& nodes)

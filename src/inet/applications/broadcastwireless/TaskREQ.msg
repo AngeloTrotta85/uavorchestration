@@ -48,7 +48,8 @@ class TaskREQ
     L3Address gen_ipAddress;
     uint32_t id;
     simtime_t gen_timestamp;
-    
+    uint8_t hops_to_deploy;
+        
     Strategy strategy; 
     DevType devType; 
     

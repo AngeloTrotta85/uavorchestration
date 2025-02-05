@@ -30,6 +30,8 @@ simple SimpleBroadcast1Hop like IApp
         double taskCreationInterval @unit(s) = default(1s); 
         double taskCreationStart @unit(s) = default(10s); 
         
+        double startMakingStats @unit(s) = default(0s);
+        
         int dissType = default(1); //HIERARCHICAL = 1, PROGRESSIVE = 2, HIERARCHICAL_CHANGES = 3
         double gamma_almost_all = default(2);
         double gamma_at_least_one = default(1.7);

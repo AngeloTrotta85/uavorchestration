@@ -107,6 +107,7 @@ public:
         simtime_t deploy_time;
         double node_pos_coord_x;
         double node_pos_coord_y;
+        int deploy_hops;
     };
 
     /*struct Task
@@ -134,6 +135,7 @@ public:
         L3Address add_deploy_node;
         double node_pos_coord_x;
         double node_pos_coord_y;
+        int num_hops_to_deploy;
     };
     struct Task_Generated_stat_info
     {
@@ -167,6 +169,8 @@ public:
     bool hasCamera;
     bool hasGPU;
     double radius; //for Aggregated net info
+
+    double startMakingStats = 0;
 
     NodeInfo lastReport; // for Changes approach
     std::deque<Change> stChanges; // for Changes approach
@@ -220,6 +224,9 @@ public:
 
     int netPktSent = 0;
     long netPktSize = 0;
+
+    int netPktSent_beforeStart = 0;
+    long netPktSize_beforeStart = 0;
 
 
 

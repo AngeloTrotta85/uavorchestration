@@ -118,6 +118,8 @@ void SimpleBroadcast1Hop::initialize(int stage)
         hasCamera = par("hasCamera").boolValue();
         hasGPU = par("hasGPU").boolValue();
 
+        startMakingStats = par("startMakingStats");
+
         if (stopTime >= CLOCKTIME_ZERO && stopTime < startTime)
             throw cRuntimeError("Invalid startTime/stopTime parameters");
         selfMsg = new ClockEvent("sendTimer");
@@ -200,8 +202,8 @@ void SimpleBroadcast1Hop::finish()
         for (int n = 0; n < nnodes; ++n) {
             SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
             L3Address n_ipaddr = appn->myAddress;
-            sumNetPktSent += appn->netPktSent;
-            sumNetPktSize += appn->netPktSize;
+            sumNetPktSent += appn->netPktSent - appn->netPktSent_beforeStart;
+            sumNetPktSize += appn->netPktSize - appn->netPktSize_beforeStart;;
 
 
 
@@ -220,6 +222,7 @@ void SimpleBroadcast1Hop::finish()
                 si.deploy_time = time_to_deploy;
                 si.node_pos_coord_x = appn->extra_info_deploy_tasks[key_map].node_pos_coord_x;
                 si.node_pos_coord_y = appn->extra_info_deploy_tasks[key_map].node_pos_coord_y;
+                si.num_hops_to_deploy = appn->extra_info_deploy_tasks[key_map].deploy_hops;
                 extra_info_per_task[key_map].extra_info.push_back(si);
             }
         }
@@ -411,6 +414,8 @@ void SimpleBroadcast1Hop::finish()
 
         double ok_task_deployed_latency_sum = 0;
 
+        double ok_task_deployed_hops_sum = 0;
+
         std::vector<double> ok_onlyExpected_all_size;
         std::vector<double> ok_onlyActual_all_size;
         std::vector<double> ok_both_all_size;
@@ -452,6 +457,7 @@ void SimpleBroadcast1Hop::finish()
             for (auto& dd : act_stat.extra_info) {
                 ok_total_task_deployed++;
                 ok_task_deployed_latency_sum += dd.deploy_time.dbl();
+                ok_task_deployed_hops_sum += dd.num_hops_to_deploy;
                 actual_deployments.push_back(dd.add_deploy_node);
 
                 printf("    node:%s; deploy time:%s \n",
@@ -577,14 +583,19 @@ void SimpleBroadcast1Hop::finish()
             ok_avg_delay = ok_task_deployed_latency_sum / ok_total_task_deployed;
         }
 
+        double ok_avg_num_hops = 0;
+        if (ok_total_task_deployed > 0) {
+            ok_avg_num_hops = ok_task_deployed_hops_sum / ok_total_task_deployed;
+        }
+
         double ok_deployed_deployable_atleast1_ratio = 0;
         if (ok_total_task_generated_deployable > 0) {
             ok_deployed_deployable_atleast1_ratio = ok_task_deployed_atleast1_if_deployable / ok_total_task_generated_deployable;
         }
 
-        double ok_task_deployed_sum_if_deployable_avg = 0;
+        double ok_task_deployed_if_deployable_avg = 0;
         if (ok_total_task_generated_deployable > 0) {
-            ok_total_task_generated_deployable = ok_task_deployed_sum_if_deployable / ok_total_task_generated_deployable;
+            ok_task_deployed_if_deployable_avg = ok_task_deployed_sum_if_deployable / ok_total_task_generated_deployable;
         }
 
         double ok_expected_size = 0;
@@ -622,18 +633,33 @@ void SimpleBroadcast1Hop::finish()
             ok_bothDecision_size = sum / ok_bothDecision_all_size.size();
         }
 
+        double ok_num_dep_avg = 0;
+        if (ok_task_deployed_atleast1 > 0) {
+            ok_num_dep_avg = ok_total_task_deployed / ok_task_deployed_atleast1;
+        }
+
+        double ok_deploy_over_deployable_avg = 0;
+        if (ok_task_deployed_if_deployable_avg > 0) {
+            ok_deploy_over_deployable_avg = ok_num_dep_avg / ok_task_deployed_if_deployable_avg;
+        }
+
         // #################
 
         recordScalar("OK - Total Info-layer packets sent", sumNetPktSent);
         recordScalar("OK - Total Info-layer traffic size", sumNetPktSize);
+        recordScalar("OK - Total Info-layer packets sent per second", sumNetPktSent / (simTime() - startMakingStats));
+        recordScalar("OK - Total Info-layer traffic size per second", sumNetPktSize / (simTime() - startMakingStats));
         recordScalar("OK - task deployed time avg", ok_avg_delay);
+        recordScalar("OK - task deployed hops avg", ok_avg_num_hops);
         recordScalar("OK - task generated number", ok_total_task_generated);
         recordScalar("OK - task deployable generated number", ok_total_task_generated_deployable);
         recordScalar("OK - task total deployment number", ok_total_task_deployed);
         recordScalar("OK - task total deployment at least 1 number", ok_task_deployed_atleast1);
         recordScalar("OK - task deployable total deployment at least 1 number", ok_task_deployed_atleast1_if_deployable);
         recordScalar("OK - task deployable total deployment at least 1 number - Ratio", ok_deployed_deployable_atleast1_ratio);
-        recordScalar("OK - task deployable total deployment number for each task - AVG", ok_total_task_generated_deployable);
+        recordScalar("OK - task deployable total deployment number for each task - AVG", ok_task_deployed_if_deployable_avg);
+        recordScalar("OK - task deployment number for each task - AVG", ok_num_dep_avg);
+        recordScalar("OK - task deployment number over deployable for each task - AVG", ok_deploy_over_deployable_avg);
 
         recordScalar("OK - expected only deployment size total", ok_expected_size);
         recordScalar("OK - actual only deployment size total", ok_actual_size);
@@ -792,7 +818,11 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
         }
 
         uint32_t s = sizeof(Heartbeat);
+
+        printf("sizeof(Heartbeat): %d; SUM: %d \n", sizeof(Heartbeat), s);fflush(stdout);
+
         netPktSize += s;
+        if (simTime() <= startMakingStats) netPktSize_beforeStart += s;
 
 
     } else {
@@ -838,7 +868,12 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
             i++;
         }
         uint32_t s = sizeof(Heartbeat) + i * sizeof(NodeInfo) ;
+
+        printf("sizeof(Heartbeat): %d; sizeof(NodeInfo): %d; i: %d, SUM: %d \n",
+                    sizeof(Heartbeat), sizeof(NodeInfo), i, s);fflush(stdout);
+
         netPktSize += s;
+        if (simTime() <= startMakingStats) netPktSize_beforeStart += s;
 
     }
     payload->addTag<CreationTimeTag>()->setCreationTime(simTime());
@@ -875,6 +910,7 @@ void SimpleBroadcast1Hop::sendPacket()
     }
     numSent++;
     netPktSent++;
+    if (simTime() <= startMakingStats) netPktSent_beforeStart++;
 
 //    const auto& payload = makeShared<Heartbeat>();
 //    payload->setChunkLength(B(par("messageLength")));
@@ -1088,6 +1124,7 @@ TaskREQ SimpleBroadcast1Hop::parseTask() // TODO
     numTaskCreated++;
     newTask.setGen_ipAddress(myAddress);
     newTask.setGen_timestamp(simTime());
+    newTask.setHops_to_deploy(0);
 
     return newTask;
 }
@@ -1255,9 +1292,10 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
         double gamma = ((task.getStrategy() == STRATEGY_FORALL) || (task.getStrategy() == STRATEGY_MANY) ?
                 par("gamma_almost_all") : par("gamma_at_least_one") );
         // min(1, gamma - score)
-        score = ((gamma - score) < 1 ? (gamma - score) : 1);
-        if (score >= 1)
-            nodeDataMap_score[it->first] = score;
+        //score = ((gamma - score) < 1 ? (gamma - score) : 1);
+        //if (score >= 1)
+        //    nodeDataMap_score[it->first] = score;
+        nodeDataMap_score[it->first] = score / gamma;
     }
 
     EV_INFO << "checkDeployDestinationAmong_Progressive - Calculated SCORES: " << endl;
@@ -1555,6 +1593,7 @@ void SimpleBroadcast1Hop::deployTaskHere(TaskREQ& task)
     extra.deploy_time = simTime();
     extra.node_pos_coord_x = mob->getCurrentPosition().x;
     extra.node_pos_coord_y = mob->getCurrentPosition().y;
+    extra.deploy_hops = task.getHops_to_deploy();
     extra_info_deploy_tasks[std::make_pair(task.getGen_ipAddress(), task.getId())] = extra;
 
     // If not already deployed, record the deployment time
@@ -1758,6 +1797,7 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
                     deployDest_out.push_back(finalDest);
                     ttlDest_out.push_back(act_ttl - 1);
                 }
+                t.setHops_to_deploy(t.getHops_to_deploy() + 1);
             }
         }
     } else if (dissType == PROGRESSIVE){
@@ -1768,6 +1808,7 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
 
         std::vector<L3Address> deployIpOptions = checkDeployDestination(t);
 
+        bool forwardingP = false;
         for (int i = 0; i < deployIpOptions.size(); ++i) {
             L3Address finalDest = deployIpOptions[i];
             if (finalDest == myAddress) {
@@ -1777,10 +1818,12 @@ void SimpleBroadcast1Hop::processTaskREQmessage(const Ptr<const TaskREQmessage>p
                     to_ack = true;
                 }
             } else {
-                    deployDest_out.push_back(finalDest);
-                    ttlDest_out.push_back(1);
+                deployDest_out.push_back(finalDest);
+                ttlDest_out.push_back(1);
+                forwardingP = true;
             }
         }
+        if (forwardingP) t.setHops_to_deploy(t.getHops_to_deploy() + 1);
     }
 
     //FORWARDING
@@ -2451,7 +2494,15 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
     //payload size
     uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
 
-    netPktSize += s;
+    printf("sizeof(ChangesBlock): %d; sizeof(Change): %d; payload->getChangesListArraySize(): %d, SUM: %d \n",
+            sizeof(ChangesBlock), sizeof(Change), payload->getChangesListArraySize(), s);fflush(stdout);
+
+    uint32_t s2 = sizeof(ChangesBlock) + payload->getChangesListArraySize() * (sizeof(uint8_t) + sizeof(double));
+    printf("sizeof(ChangesBlock): %d; sizeof(Change): %d; payload->getChangesListArraySize(): %d, SUM: %d \n",
+                sizeof(ChangesBlock), (sizeof(uint8_t) + sizeof(double)), payload->getChangesListArraySize(), s2);fflush(stdout);
+
+    netPktSize += s2;
+    if (simTime() <= startMakingStats) netPktSize_beforeStart += s2;
 
     //payload->setChunkLength(B(s));
     payload->setChunkLength(B(par("messageLength")));

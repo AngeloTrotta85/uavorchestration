@@ -148,8 +148,11 @@ void SimpleBroadcast1Hop::finish()
 {
     recordScalar("packets sent", numSent);
     recordScalar("packets received", numReceived);
-    recordScalar("OK - Info-layer packets sent", netPktSent);
-    recordScalar("OK - Info-layer traffic size", netPktSize);
+    recordScalar("Info-layer packets sent", netPktSent);
+    recordScalar("Info-layer traffic size", netPktSize);
+
+    int sumNetPktSent = 0;
+    long sumNetPktSize = 0;
 
     if (myAppAddr == 0) {
         int nnodes = this->getParentModule()->getVectorSize();
@@ -194,8 +197,6 @@ void SimpleBroadcast1Hop::finish()
 
         }
 
-        int sumNetPktSent = 0;
-        long sumNetPktSize = 0;
         for (int n = 0; n < nnodes; ++n) {
             SimpleBroadcast1Hop *appn = check_and_cast<SimpleBroadcast1Hop *>(this->getParentModule()->getParentModule()->getSubmodule("host", n)->getSubmodule("app", 0));
             L3Address n_ipaddr = appn->myAddress;
@@ -223,8 +224,6 @@ void SimpleBroadcast1Hop::finish()
             }
         }
 
-        recordScalar("OK - Total Info-layer packets sent", sumNetPktSent);
-        recordScalar("OK - Total Info-layer traffic size", sumNetPktSize);
 
         std::vector<L3Address> onlyExpected_all;
         std::vector<L3Address> onlyActual_all;
@@ -625,6 +624,8 @@ void SimpleBroadcast1Hop::finish()
 
         // #################
 
+        recordScalar("OK - Total Info-layer packets sent", sumNetPktSent);
+        recordScalar("OK - Total Info-layer traffic size", sumNetPktSize);
         recordScalar("OK - task deployed time avg", ok_avg_delay);
         recordScalar("OK - task generated number", ok_total_task_generated);
         recordScalar("OK - task deployable generated number", ok_total_task_generated_deployable);

@@ -830,7 +830,7 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
 
         uint32_t s = sizeof(Heartbeat);
 
-        printf("sizeof(Heartbeat): %d; SUM: %d \n", sizeof(Heartbeat), s);fflush(stdout);
+        //printf("sizeof(Heartbeat): %d; SUM: %d \n", sizeof(Heartbeat), s);fflush(stdout);
 
         netPktSize += s;
         if (simTime() <= startMakingStats) netPktSize_beforeStart += s;
@@ -880,8 +880,8 @@ Ptr<Heartbeat> SimpleBroadcast1Hop::createPayload()
         }
         uint32_t s = sizeof(Heartbeat) + i * sizeof(NodeInfo) ;
 
-        printf("sizeof(Heartbeat): %d; sizeof(NodeInfo): %d; i: %d, SUM: %d \n",
-                    sizeof(Heartbeat), sizeof(NodeInfo), i, s);fflush(stdout);
+        //printf("sizeof(Heartbeat): %d; sizeof(NodeInfo): %d; i: %d, SUM: %d \n",
+        //            sizeof(Heartbeat), sizeof(NodeInfo), i, s);fflush(stdout);
 
         netPktSize += s;
         if (simTime() <= startMakingStats) netPktSize_beforeStart += s;
@@ -2511,12 +2511,12 @@ Ptr<ChangesBlock> SimpleBroadcast1Hop::createChangesPayload()
     //payload size
     uint32_t s = sizeof(ChangesBlock) + payload->getChangesListArraySize() * sizeof(Change);
 
-    printf("sizeof(ChangesBlock): %d; sizeof(Change): %d; payload->getChangesListArraySize(): %d, SUM: %d \n",
-            sizeof(ChangesBlock), sizeof(Change), payload->getChangesListArraySize(), s);fflush(stdout);
+    //printf("sizeof(ChangesBlock): %d; sizeof(Change): %d; payload->getChangesListArraySize(): %d, SUM: %d \n",
+    //        sizeof(ChangesBlock), sizeof(Change), payload->getChangesListArraySize(), s);fflush(stdout);
 
     uint32_t s2 = sizeof(ChangesBlock) + payload->getChangesListArraySize() * (sizeof(uint8_t) + sizeof(double));
-    printf("sizeof(ChangesBlock): %d; sizeof(Change): %d; payload->getChangesListArraySize(): %d, SUM: %d \n",
-                sizeof(ChangesBlock), (sizeof(uint8_t) + sizeof(double)), payload->getChangesListArraySize(), s2);fflush(stdout);
+    //printf("sizeof(ChangesBlock): %d; sizeof(Change): %d; payload->getChangesListArraySize(): %d, SUM: %d \n",
+    //            sizeof(ChangesBlock), (sizeof(uint8_t) + sizeof(double)), payload->getChangesListArraySize(), s2);fflush(stdout);
 
     netPktSize += s2;
     if (simTime() <= startMakingStats) netPktSize_beforeStart += s2;

@@ -150,7 +150,7 @@ public:
     enum TaskForwardMsgKinds { FORWARD = 1 };
     enum TaskAckMsgKinds { ACK_CHECK = 1 };
 
-    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE, HIERARCHICAL_CHANGES };
+    enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE = 2, HIERARCHICAL_CHANGES = 3 };
 
     // parameters
     std::vector<L3Address> destAddresses;

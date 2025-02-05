@@ -1246,7 +1246,17 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
     //create score map
     for (std::map<inet::L3Address, NodeData>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
         double score = calculateProgressiveScore(task, it->second);
-        nodeDataMap_score[it->first] = score;
+        //gamma -> between almost_all and at_least_one
+        //
+        // STRATEGY_FORALL => gamma=almost_all
+        //
+
+        double gamma = ((task.getStrategy() == STRATEGY_FORALL) || (task.getStrategy() == STRATEGY_MANY) ?
+                par("gamma_almost_all") : par("gamma_at_least_one") );
+        // min(1, gamma - score)
+        score = ((gamma - score) < 1 ? (gamma - score) : 1);
+        if (score >= 1)
+            nodeDataMap_score[it->first] = score;
     }
 
     EV_INFO << "checkDeployDestinationAmong_Progressive - Calculated SCORES: " << endl;
@@ -1257,23 +1267,23 @@ std::vector<L3Address> SimpleBroadcast1Hop::checkDeployDestinationAmong_Progress
     size_t mapSize = nodeDataMap_score.size();
 
     if (mapSize != 0){
-        if ((task.getStrategy() == STRATEGY_FORALL) || (task.getStrategy() == STRATEGY_MANY)) {
+//        if ((task.getStrategy() == STRATEGY_FORALL) || (task.getStrategy() == STRATEGY_MANY)) {
             for (std::map<inet::L3Address, double>::iterator it = nodeDataMap_score.begin(); it != nodeDataMap_score.end(); ++it) {
                 ris.push_back(it->first);
             }
-        }
-        else {
-            L3Address best = L3Address("0.0.0.0");
-            double score_max = 0;
-            for (std::map<inet::L3Address, double>::iterator it = nodeDataMap_score.begin(); it != nodeDataMap_score.end(); ++it) {
-                if (it->second > score_max) {
-                    best = it->first;
-                    score_max = it->second;
-                }
-            }
-            ris.push_back(best);
-
-        }
+//        }
+//        else {
+//            L3Address best = L3Address("0.0.0.0");
+//            double score_max = 0;
+//            for (std::map<inet::L3Address, double>::iterator it = nodeDataMap_score.begin(); it != nodeDataMap_score.end(); ++it) {
+//                if (it->second > score_max) {
+//                    best = it->first;
+//                    score_max = it->second;
+//                }
+//            }
+//            ris.push_back(best);
+//
+//        }
 
     }
 

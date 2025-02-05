@@ -75,6 +75,23 @@ void SimpleBroadcast1Hop::initialize(int stage)
     ClockUserModuleMixin::initialize(stage);
 
     if (stage == INITSTAGE_LOCAL) {
+
+        int dt = par("dissType");
+        switch (dt){
+            case 1:
+                dissType = HIERARCHICAL;
+                if (this->getParentModule()->getIndex() == 0) printf("\n*** HIERARCHICAL ***\n");
+                break;
+            case 2:
+                dissType = PROGRESSIVE;
+                if (this->getParentModule()->getIndex() == 0) printf("\n*** PROGRESSIVE ***\n");
+                break;
+            default:
+                dissType = HIERARCHICAL_CHANGES;
+                if (this->getParentModule()->getIndex() == 0) printf("\n*** HIERARCHICAL_CHANGES ***\n");
+
+        }
+
         numSent = 0;
         numReceived = 0;
         netPktSent = 0;

@@ -30,6 +30,8 @@ simple SimpleBroadcast1Hop like IApp
         double taskCreationInterval @unit(s) = default(1s); 
         double taskCreationStart @unit(s) = default(10s); 
         
+        int dissType = default(1); //HIERARCHICAL = 1, PROGRESSIVE = 2, HIERARCHICAL_CHANGES = 3
+        
         string interfaceTableModule;   // The path to the InterfaceTable module
         string clockModule = default(""); // relative path of a module that implements IClock; optional
         int localPort = default(-1);  // local port (-1: use ephemeral port)

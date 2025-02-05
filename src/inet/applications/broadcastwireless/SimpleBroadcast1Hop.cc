@@ -92,6 +92,17 @@ void SimpleBroadcast1Hop::initialize(int stage)
 
         }
 
+        int st = par("strategyType");
+        switch (st){
+        case 1:
+            strType = STRATEGY_FORALL;
+            if (this->getParentModule()->getIndex() == 0) printf("\n*** ALL ***\n");
+            break;
+        default:
+            strType = STRATEGY_EXISTS;
+            if (this->getParentModule()->getIndex() == 0) printf("\n*** ONE ***\n");
+        }
+
         numSent = 0;
         numReceived = 0;
         netPktSent = 0;
@@ -1101,8 +1112,14 @@ TaskREQ SimpleBroadcast1Hop::parseTask() // TODO
 {
     TaskREQ newTask = TaskREQ();
 
+    if (strType == STRATEGY_FORALL) {
+        newTask.setStrategy(STRATEGY_FORALL);
+    }
+    else {
+        newTask.setStrategy(STRATEGY_EXISTS);
+    }
     //EXAMPLE OF SCANPEOPLE
-    newTask.setStrategy(STRATEGY_FORALL);
+    //newTask.setStrategy(STRATEGY_FORALL);
     //newTask.setStrategy(STRATEGY_MANY);
     //newTask.setStrategy(STRATEGY_EXISTS);
     //newTask.setStrategy(STRATEGY_EXAC);

@@ -33,6 +33,7 @@ simple SimpleBroadcast1Hop like IApp
         double startMakingStats @unit(s) = default(0s);
         
         int dissType = default(1); //HIERARCHICAL = 1, PROGRESSIVE = 2, HIERARCHICAL_CHANGES = 3
+        int strategyType = default(1); //STRATEGY_FORALL = 1, STRATEGY_EXISTS = 2
         double gamma_almost_all = default(2);
         double gamma_at_least_one = default(1.7);
         

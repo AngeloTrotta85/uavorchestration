@@ -153,6 +153,7 @@ public:
     enum TaskAckMsgKinds { ACK_CHECK = 1 };
 
     enum DisseminationType { HIERARCHICAL = 1, PROGRESSIVE = 2, HIERARCHICAL_CHANGES = 3 };
+    //enum StrategyType { STRATEGY_FORALL = 1, STRATEGY_EXISTS = 2};
 
     // parameters
     std::vector<L3Address> destAddresses;
@@ -235,6 +236,8 @@ public:
     DisseminationType dissType = HIERARCHICAL;// full table of nodes in network
     //DisseminationType dissType = PROGRESSIVE;
     //DisseminationType dissType = HIERARCHICAL_CHANGES;
+
+    Strategy strType = STRATEGY_FORALL;
 
 
     //static simsignal_t taskDeploymentTimeSignal;   // to record times
